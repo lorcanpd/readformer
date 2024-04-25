@@ -84,3 +84,4 @@ def plot_nucleotide_coverage(read_dict, position) -> None:
     plt.title('Per-Nucleotide Coverage Depth around Genomic Position')
     plt.axvline(x=0, color='r', linestyle='--')
     plt.show()
+

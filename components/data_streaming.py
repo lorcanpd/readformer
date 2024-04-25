@@ -3,67 +3,42 @@ import os
 import random
 import pandas as pd
 import tensorflow as tf
-from extract_reads import (
+from components.extract_reads import (
     extract_reads_from_position_onward, sample_positions,  get_read_info
 )
 
 
-def process_read_entry(read_entry):
-    # Extract relevant fields from the dictionary
-    query_sequence = read_entry['query_sequence']
-
-    # Convert the query sequence to indices (A, C, G, T, etc. mapped to 0, 1, 2, 3, ..., respectively)
-    # This requires a mapping from nucleotide to index. Here's a simple approach:
-    nucleotide_to_index_map = {
-        'A': 1, 'C': 2, 'G': 3, 'T': 4, 'R': 5, 'Y': 6, 'S': 7, 'W': 8, 'K': 9,
-        'M': 10, 'B': 11, 'D': 12, 'H': 13, 'V': 14, 'N': 15
-    }
-    indices = [nucleotide_to_index_map.get(nuc, 0) for nuc in query_sequence]
-
-    # Convert indices list to a tensor
-    indices_tensor = tf.constant(indices, dtype=tf.int32)
-
-    # Apply the embedding layer
-    embedded_sequence = nucleotide_embedding_layer(indices_tensor)
-
-    return embedded_sequence
-
-
-def replicate_binary_flag_vector(
-        binary_flag_vector, nucleotide_threshold, sequence_length
-)-> tf.Tensor:
+def replicate_binary_flag_vector_list(
+        binary_flag_vector, sequence_length
+):
     """
-    Replicates a binary flag vector for each nucleotide position in the sequence.
+    Replicates a binary flag vector for each nucleotide position in the sequence
+    using lists.
 
     :param binary_flag_vector:
         The binary flag vector for a read.
-    :param nucleotide_threshold:
-        The nucleotide threshold or maximum sequence length for padding.
+    :param sequence_length:
+        The actual sequence length of the read.
     :return:
-        A replicated binary flag vector of shape (sequence_length, 12).
+        A replicated binary flag vector of shape (sequence_length, vector_size).
     """
-    # Expand dimensions to allow replication across the sequence length
-    # Shape: (1, 12)
-    expanded_vector = tf.expand_dims(binary_flag_vector, 0)
-    # Replicate the binary flag vector for each nucleotide position
-    # Shape: (sequence_length, 12)
-    replicated_vector = tf.tile(
-        expanded_vector, [sequence_length, 1]
-    )
+    # Initialize the replicated list with zeros
+    replicated_vector = [
+        [0] * len(binary_flag_vector) for _ in range(sequence_length)
+    ]
 
-    # If the actual sequence is shorter than the nucleotide_threshold, pad the
-    # remainder
-    if sequence_length < nucleotide_threshold:
-        # Pad sequences to match the threshold
-        padding = [[0, nucleotide_threshold - sequence_length], [0, 0]]
-        replicated_vector = tf.pad(
-            replicated_vector, padding, "CONSTANT", constant_values=0
-        )
+    # Fill the replicated list with the binary_flag_vector values up to the
+    # sequence length
+    for i in range(sequence_length):
+        replicated_vector[i] = binary_flag_vector.copy()
 
     return replicated_vector
 
 
-def bam_read_generator(file_paths, metadata_path, nucleotide_threshold, batch_size):
+def random_bam_read_generator(
+        file_paths, metadata_path, nucleotide_threshold, batch_size,
+        max_retries=10
+):
     """
     Generator function to yield batches of processed reads from BAM files, with
     dynamic sampling of file paths, chromosomes, and positions.
@@ -103,70 +78,212 @@ def bam_read_generator(file_paths, metadata_path, nucleotide_threshold, batch_si
                     metadata['file_path'] == file_path.split('/')[-1]
                 ]['sex'].values[0]
 
-            chromosome, position = sample_positions(1, sex)
+            retries = 0
+            while retries < max_retries:
+                positions = sample_positions(1, sex)
+                read_dict = extract_reads_from_position_onward(
+                    file_path, 'chr' + positions[0][0], positions[0][1],
+                    nucleotide_threshold
+                )
+                if not read_dict:  # If read_dict is empty
+                    retries += 1
+                else:
+                    break
 
-            read_dict = extract_reads_from_position_onward(
-                file_path, chromosome, str(position), nucleotide_threshold
-            )
             read_info = get_read_info(read_dict)
+
+            nucleotide_sequences = []
+            base_qualities = []
+            read_qualities = []
+            cigar_match = []
+            cigar_insertion = []
+            bitwise_flags = []
+            positions = []
 
             for read in read_info.values():
                 sequence_length = len(read['query_sequence'])
-                batch_nucleotide_sequences.append(
-                    read['query_sequence']
-                )
-                batch_base_qualities.append(
-                    tf.cast(read['adjusted_base_qualities'], tf.int32)
-                )
-                batch_read_qualities.append(
-                    tf.fill(
-                        [sequence_length],
-                        read['mapping_quality']
-                    )
-                )
-                batch_cigar_match.append(
-                    tf.cast(read['cigar_match_vector'], tf.int32)
-                )
-                batch_cigar_insertion.append(
-                    tf.cast(read['cigar_insertion_vector'], tf.int32)
-                )
-                batch_bitwise_flags.append(
-                    replicate_binary_flag_vector(
+                nucleotide_sequences += list(read['query_sequence'])
+                base_qualities += read['base_qualities']
+                read_qualities += [read['mapping_quality']] * sequence_length
+                cigar_match += read['cigar_match_vector']
+                cigar_insertion += read['cigar_insertion_vector']
+                bitwise_flags += replicate_binary_flag_vector_list(
                         read['binary_flag_vector'],
-                        nucleotide_threshold,
                         sequence_length
                     )
-                )
-                batch_positions.append(read['positions'])
+                positions += read['positions']
 
-            batch_nucleotide_sequences = tf.keras.preprocessing.sequence.pad_sequences(
-                batch_nucleotide_sequences, maxlen=nucleotide_threshold,
-                padding='post', truncating='post', dtype='str', value=''
+            batch_nucleotide_sequences.append(nucleotide_sequences)
+            batch_base_qualities.append(base_qualities)
+            batch_read_qualities.append(read_qualities)
+            batch_cigar_match.append(cigar_match)
+            batch_cigar_insertion.append(cigar_insertion)
+            batch_bitwise_flags.append(bitwise_flags)
+            batch_positions.append(positions)
+
+        batch_nucleotide_sequences = (
+            tf.keras.preprocessing.sequence.pad_sequences(
+            batch_nucleotide_sequences, maxlen=nucleotide_threshold,
+            padding='post', truncating='post', dtype='str', value=''
+        ))
+        batch_base_qualities = tf.keras.preprocessing.sequence.pad_sequences(
+            batch_base_qualities, maxlen=nucleotide_threshold,
+            padding='post', truncating='post', value=0.0, dtype='float32'
+        )
+        batch_read_qualities = tf.keras.preprocessing.sequence.pad_sequences(
+            batch_read_qualities, maxlen=nucleotide_threshold,
+            padding='post', truncating='post', value=0.0, dtype='float32'
+        )
+        batch_cigar_match = tf.keras.preprocessing.sequence.pad_sequences(
+            batch_cigar_match, maxlen=nucleotide_threshold,
+            padding='post', truncating='post', value=0.0, dtype='float32'
+        )
+        batch_cigar_insertion = tf.keras.preprocessing.sequence.pad_sequences(
+            batch_cigar_insertion, maxlen=nucleotide_threshold,
+            padding='post', truncating='post', value=0.0, dtype='float32'
+        )
+        batch_bitwise_flags = tf.keras.preprocessing.sequence.pad_sequences(
+            batch_bitwise_flags, maxlen=nucleotide_threshold,
+            padding='post', truncating='post', value=0.0, dtype='float32'
+        )
+        batch_positions = tf.keras.preprocessing.sequence.pad_sequences(
+            batch_positions, maxlen=nucleotide_threshold,
+            padding='post', truncating='post', value=-1
+        )
+
+        yield (
+            batch_nucleotide_sequences, batch_base_qualities,
+            batch_read_qualities, batch_cigar_match, batch_cigar_insertion,
+            batch_bitwise_flags, batch_positions
+        )
+
+# TODO: Develop a generator function for known mutations.
+def selected_bam_read_generator(
+        data_dir, vcf_path, nucleotide_threshold, batch_size,
+        max_retries=10
+):
+    """
+    Generator function to yield batches of processed reads from BAM files, with
+    dynamic sampling of file paths, chromosomes, and positions.
+
+    :param file_paths:
+        List of paths to BAM files or a directory path containing BAM files.
+    :param metadata_path:
+        Path to the metadata file containing information about the samples.
+    :param nucleotide_threshold:
+        Nucleotide coverage threshold.
+    :param batch_size:
+        Number of samples per batch.
+    """
+    if os.path.isdir(data_dir):
+        file_paths = [
+            os.path.join(data_dir, f) for f in os.listdir(data_dir)
+            if f.endswith('.bam')
+        ]
+    else:
+        print('Data directory does not exist.')
+        raise NotADirectoryError
+
+
+    mutations = pd.read_csv(vcf_path)
+    # Only keep case_id, sample_id, Chr, Position, Ref and Alt columns.
+    mutations = mutations[
+        ['case_id', 'sample_id', 'Chr', 'Position', 'Ref', 'Alt']
+    ]
+
+    while True:  # Loop forever so the generator never terminates
+        batch_nucleotide_sequences = []
+        batch_base_qualities = []
+        batch_read_qualities = []
+        batch_cigar_match = []
+        batch_cigar_insertion = []
+        batch_bitwise_flags = []
+        batch_positions = []
+
+        # Select batch_size number of rows from the mutations dataframe
+        selected_mutations = mutations.sample(n=batch_size)
+
+        for index, row in selected_mutations.iterrows():
+            # TODO:
+            file_path = os.path.join(
+                data_dir, row['case_id'], row['sample_id'] + '.bam'
             )
-            batch_base_qualities = tf.keras.preprocessing.sequence.pad_sequences(
-                batch_base_qualities, maxlen=nucleotide_threshold,
-                padding='post', truncating='post'
-            )
-            batch_read_qualities = tf.keras.preprocessing.sequence.pad_sequences(
-                batch_read_qualities, maxlen=nucleotide_threshold,
-                padding='post', truncating='post'
-            )
-            batch_cigar_match = tf.keras.preprocessing.sequence.pad_sequences(
-                batch_cigar_match, maxlen=nucleotide_threshold,
-                padding='post', truncating='post'
-            )
-            batch_cigar_insertion = tf.keras.preprocessing.sequence.pad_sequences(
-                batch_cigar_insertion, maxlen=nucleotide_threshold,
-                padding='post', truncating='post'
-            )
-            batch_bitwise_flags = tf.keras.preprocessing.sequence.pad_sequences(
-                batch_bitwise_flags, maxlen=nucleotide_threshold,
-                padding='post', truncating='post'
-            )
-            batch_positions = tf.keras.preprocessing.sequence.pad_sequences(
-                batch_positions, maxlen=nucleotide_threshold,
-                padding='post', truncating='post', value=-1
-            )
+
+        for _ in range(batch_size):
+
+
+            retries = 0
+            while retries < max_retries:
+                positions = sample_positions(1, sex)
+                read_dict = extract_reads_from_position_onward(
+                    file_path, 'chr' + positions[0][0], positions[0][1],
+                    nucleotide_threshold
+                )
+                if not read_dict:  # If read_dict is empty
+                    retries += 1
+                else:
+                    break
+
+            read_info = get_read_info(read_dict)
+
+            nucleotide_sequences = []
+            base_qualities = []
+            read_qualities = []
+            cigar_match = []
+            cigar_insertion = []
+            bitwise_flags = []
+            positions = []
+
+            for read in read_info.values():
+                sequence_length = len(read['query_sequence'])
+                nucleotide_sequences += list(read['query_sequence'])
+                base_qualities += read['base_qualities']
+                read_qualities += [read['mapping_quality']] * sequence_length
+                cigar_match += read['cigar_match_vector']
+                cigar_insertion += read['cigar_insertion_vector']
+                bitwise_flags += replicate_binary_flag_vector_list(
+                        read['binary_flag_vector'],
+                        sequence_length
+                    )
+                positions += read['positions']
+
+            batch_nucleotide_sequences.append(nucleotide_sequences)
+            batch_base_qualities.append(base_qualities)
+            batch_read_qualities.append(read_qualities)
+            batch_cigar_match.append(cigar_match)
+            batch_cigar_insertion.append(cigar_insertion)
+            batch_bitwise_flags.append(bitwise_flags)
+            batch_positions.append(positions)
+
+        batch_nucleotide_sequences = (
+            tf.keras.preprocessing.sequence.pad_sequences(
+            batch_nucleotide_sequences, maxlen=nucleotide_threshold,
+            padding='post', truncating='post', dtype='str', value=''
+        ))
+        batch_base_qualities = tf.keras.preprocessing.sequence.pad_sequences(
+            batch_base_qualities, maxlen=nucleotide_threshold,
+            padding='post', truncating='post', value=0.0, dtype='float32'
+        )
+        batch_read_qualities = tf.keras.preprocessing.sequence.pad_sequences(
+            batch_read_qualities, maxlen=nucleotide_threshold,
+            padding='post', truncating='post', value=0.0, dtype='float32'
+        )
+        batch_cigar_match = tf.keras.preprocessing.sequence.pad_sequences(
+            batch_cigar_match, maxlen=nucleotide_threshold,
+            padding='post', truncating='post', value=0.0, dtype='float32'
+        )
+        batch_cigar_insertion = tf.keras.preprocessing.sequence.pad_sequences(
+            batch_cigar_insertion, maxlen=nucleotide_threshold,
+            padding='post', truncating='post', value=0.0, dtype='float32'
+        )
+        batch_bitwise_flags = tf.keras.preprocessing.sequence.pad_sequences(
+            batch_bitwise_flags, maxlen=nucleotide_threshold,
+            padding='post', truncating='post', value=0.0, dtype='float32'
+        )
+        batch_positions = tf.keras.preprocessing.sequence.pad_sequences(
+            batch_positions, maxlen=nucleotide_threshold,
+            padding='post', truncating='post', value=-1
+        )
 
         yield (
             batch_nucleotide_sequences, batch_base_qualities,
@@ -175,7 +292,10 @@ def bam_read_generator(file_paths, metadata_path, nucleotide_threshold, batch_si
         )
 
 
-def create_tf_dataset(file_paths, metadata_path, nucleotide_threshold, batch_size):
+
+def create_tf_dataset(
+        file_paths, metadata_path, nucleotide_threshold, batch_size
+):
     """
     Create a TensorFlow dataset from the BAM read generator.
 
@@ -189,26 +309,43 @@ def create_tf_dataset(file_paths, metadata_path, nucleotide_threshold, batch_siz
         Number of samples per batch.
     """
 
-    output_types = (
-        tf.string, tf.int32, tf.int32, tf.int32, tf.int32, tf.int32, tf.int32
-    )
-    # Define the output shapes, all outputs are [batch size, nucleotide_threshold]
-    # except for the bitwise flags with shape [batch size, nucleotide_threshold, 12]
-    output_shapes = (
-        [batch_size, nucleotide_threshold], [batch_size, nucleotide_threshold],
-        [batch_size, nucleotide_threshold], [batch_size, nucleotide_threshold],
-        [batch_size, nucleotide_threshold],
-        [batch_size, nucleotide_threshold, 12],
-        [batch_size, nucleotide_threshold]
+    output_signature = (
+        tf.TensorSpec(
+            shape=(batch_size, nucleotide_threshold), dtype=tf.string,
+            name='nucleotide_sequences'
+        ),
+        tf.TensorSpec(
+            shape=(batch_size, nucleotide_threshold), dtype=tf.float32,
+            name='base_qualities'
+        ),
+        tf.TensorSpec(
+            shape=(batch_size, nucleotide_threshold), dtype=tf.float32,
+            name='read_qualities'
+        ),
+        tf.TensorSpec(
+            shape=(batch_size, nucleotide_threshold), dtype=tf.float32,
+            name='cigar_match'
+        ),
+        tf.TensorSpec(
+            shape=(batch_size, nucleotide_threshold), dtype=tf.float32,
+            name='cigar_insertion'
+        ),
+        tf.TensorSpec(
+            shape=(batch_size, nucleotide_threshold, 12), dtype=tf.float32,
+            name='bitwise_flags'
+        ),
+        tf.TensorSpec(
+            shape=(batch_size, nucleotide_threshold), dtype=tf.int32,
+            name='positions'
+        ),
     )
 
-    # Create a dataset from the generator
     dataset = tf.data.Dataset.from_generator(
         lambda: bam_read_generator(
             file_paths, metadata_path, nucleotide_threshold, batch_size
         ),
-        output_types=output_types,
-        output_shapes=output_shapes
+        output_signature=output_signature
     )
 
     return dataset
+

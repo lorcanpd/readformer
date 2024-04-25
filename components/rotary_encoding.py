@@ -26,7 +26,7 @@ def compute_theta_vector(d_model) -> tf.Tensor:
     return theta_i
 
 
-def compute_rotation_angles(loci_positions, d_model) -> tf.Tensor:
+def compute_rotation_angles(loci_positions, d_model, theta_vector) -> tf.Tensor:
     """
     Compute rotation angles for each dimension of the embedding vectors.
 
@@ -35,6 +35,9 @@ def compute_rotation_angles(loci_positions, d_model) -> tf.Tensor:
         [batch_size, seq_len] containing integer positions.
     :param d_model:
         The dimensionality of the embedding vectors.
+    :param theta_vector:
+        Vector of theta values for rotary encoding. A tensor of shape
+        [d_model//2]
     :return:
         A tensor of shape [batch_size, seq_len, d_model//2, 2, 2] containing
         rotation matrices for each dimension of the embedding vectors.
@@ -43,7 +46,7 @@ def compute_rotation_angles(loci_positions, d_model) -> tf.Tensor:
     batch_size, seq_len = tf.shape(loci_positions)
 
     # Expand theta_vector to match batch and sequence dimensions
-    theta_vector = compute_theta_vector(d_model)
+    # theta_vector = compute_theta_vector(d_model)
     theta_vector = tf.reshape(
         theta_vector, [1, 1, -1]
     )  # Shape: [1, 1, d_model//2]
@@ -74,7 +77,7 @@ def compute_rotation_angles(loci_positions, d_model) -> tf.Tensor:
     return rotation_matrices
 
 
-def apply_dimensionwise_rotation(embeddings, rotation_matrices ) -> tf.Tensor:
+def apply_dimensionwise_rotation(embeddings, rotation_matrices) -> tf.Tensor:
     """
     Apply dimension-wise rotation to the embeddings. This is done by rotating
     each dimension of the embeddings by a factor of its genomic position. The
