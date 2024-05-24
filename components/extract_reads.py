@@ -318,13 +318,13 @@ def get_read_info(read_dict):
 
 
 
-#
+# #
 # bam_file_path = 'TEST_DATA/HG002.GRCh38.2x250.bam'
 #
 # positions = sample_positions(2, sex='male')
 #
 # read_dict = extract_reads_from_position_onward(
-#     bam_file_path, 'chr' + positions[1][0], positions[1][1], 1024*16
+#     bam_file_path, 'chr' + positions[1][0], positions[1][1], 1024*12
 # )
 #
 # read_info = get_read_info(read_dict)
@@ -332,4 +332,3 @@ def get_read_info(read_dict):
 # from components.plots import plot_nucleotide_coverage, plot_mapping_and_base_quality_histogram
 #
 # plot_nucleotide_coverage(read_dict, positions[1][1])
-#
