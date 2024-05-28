@@ -1,10 +1,9 @@
-
+import torch
 import matplotlib.pyplot as plt
+import pandas as pd
 import numpy as np
 
 
-
-# TODO: Move to plots module.
 def plot_mapping_and_base_quality_histogram(final_dict, log_scale=False):
     # initialise the lattice plot
     fig, axs = plt.subplots(1, 2, figsize=(20, 10))
@@ -36,7 +35,7 @@ def plot_mapping_and_base_quality_histogram(final_dict, log_scale=False):
     plt.tight_layout()
     plt.show()
 
-# TODO: Move to plots module.
+
 def plot_nucleotide_coverage(read_dict, position) -> None:
     """
     Plot the per-nucleotide coverage depth around a given genomic position.
@@ -77,7 +76,7 @@ def plot_nucleotide_coverage(read_dict, position) -> None:
     # relative_position = position - min_start
 
     plt.figure(figsize=(10, 6))
-    plt.bar(np.arange(min_start, max_end+1) - position,
+    plt.bar(np.arange(min_start, max_end + 1) - position,
             coverage, width=1.0, edgecolor='black', linewidth=0.5)
     plt.xlabel('Position relative to specified genomic position')
     plt.ylabel('Coverage Depth')
@@ -85,3 +84,79 @@ def plot_nucleotide_coverage(read_dict, position) -> None:
     plt.axvline(x=0, color='r', linestyle='--')
     plt.show()
 
+
+def plot_replacement_statistics(original_sequences, corrupted_sequences, positions):
+    batch_size, seq_length = original_sequences.size()
+
+    replacement_counts = []
+    proportion_replaced = []
+    for i in range(batch_size):
+        seq_positions = positions[i][positions[i] != -1]
+        unique_positions = torch.unique(seq_positions)
+        for pos in unique_positions:
+            if pos == -1:
+                continue
+            original_count = torch.sum((positions[i] == pos) & (original_sequences[i] == corrupted_sequences[i])).item()
+            replaced_count = torch.sum((positions[i] == pos) & (original_sequences[i] != corrupted_sequences[i])).item()
+            proportion = replaced_count / (original_count + replaced_count)
+            if replaced_count > 0:
+                replacement_counts.append(replaced_count)
+                proportion_replaced.append(proportion)
+
+    # Calculate the proportion of replaced bases per position
+
+    # Plot histogram
+    plt.figure(figsize=(10, 6))
+    plt.hist(proportion_replaced, range=(0, 1), bins=100, edgecolor='black')
+    plt.xlabel('Proportion of Bases Replaced at a Position')
+    plt.ylabel('Number of Positions')
+    plt.title('Distribution of Base Replacements per Position')
+    # plt.yscale('log')  # Use a logarithmic scale to emphasize the long tail
+    plt.show()
+
+
+def plot_nucleotide_replacement_histogram(
+        original_sequences, corrupted_sequences, positions
+):
+
+
+    batch_size, seq_length = original_sequences.size()
+    fig, axes = plt.subplots(batch_size, 1, sharex=True)
+
+    if batch_size == 1:
+        axes = [axes]
+
+    for i in range(batch_size):
+        seq_positions = positions[i][positions[i] != -1]
+        min_pos = seq_positions.min().item()
+        max_pos = seq_positions.max().item()
+        all_positions = np.arange(min_pos, max_pos + 1)
+        original_counts = np.zeros(max_pos - min_pos + 1, dtype=int)
+        replaced_counts = np.zeros(max_pos - min_pos + 1, dtype=int)
+
+        for j, pos in enumerate(all_positions):
+            original_counts[j] = torch.sum(
+                (positions[i] == pos) & (
+                        original_sequences[i] == corrupted_sequences[i])
+            ).item()
+            replaced_counts[j] = torch.sum(
+                (positions[i] == pos) & (
+                        original_sequences[i] != corrupted_sequences[i])
+            ).item()
+
+        # Create the data for plotting
+        df = pd.DataFrame({
+            'Position': all_positions,
+            'Original': original_counts,
+            'Replaced': replaced_counts
+        })
+
+        # Plot stacked bar chart
+        df.set_index('Position').plot(kind='bar', stacked=True, ax=axes[i], color=['blue', 'red'])
+        axes[i].set_title(f"Sequence {i + 1}")
+        axes[i].set_xlabel('Position')
+        axes[i].set_ylabel('Count')
+        axes[i].legend(title='Type', labels=['Original', 'Replaced'])
+
+    plt.tight_layout()
+    plt.show()
