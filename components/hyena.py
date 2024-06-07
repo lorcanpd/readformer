@@ -17,7 +17,7 @@ class CustomMaskedConv1D(nn.Module):
         self.in_channels_per_group = in_channels // groups
         self.out_channels_per_group = out_channels // groups
         self.kernel = nn.Parameter(
-            nn.init.xavier_uniform_(
+            nn.init.kaiming_uniform_(
                 torch.randn(
                     1, 1, groups,
                     self.out_channels_per_group,
@@ -64,6 +64,10 @@ class CustomMaskedConv1D(nn.Module):
         # dimension
         # output shape = (batch_size, seq_length, groups, out_channels_per_group)
         output = conv_result.sum(dim=(-1, -2))
+
+        if torch.isnan(output).any():
+            breakpoint()
+
         return output
 
 
@@ -73,7 +77,7 @@ class HyenaProjection(nn.Module):
         self.groups = n_order + 1
         self.emb_dim = emb_dim
         self.W = nn.Parameter(
-            nn.init.xavier_normal_(torch.randn(emb_dim, self.groups * emb_dim))
+            nn.init.kaiming_uniform_(torch.randn(emb_dim, self.groups * emb_dim))
         )
         self.custom_conv = CustomMaskedConv1D(
             kernel_size, self.groups * emb_dim, self.groups * emb_dim,
@@ -86,6 +90,10 @@ class HyenaProjection(nn.Module):
         z = self.custom_conv(x, positions)
         # Reshape z to batch_size x D x N x L
         z = z.reshape(z.size(0), self.emb_dim, self.groups, -1)
+
+        if torch.isnan(z).any():
+            breakpoint()
+
         # Unstack the groups for separate processing
         z = z.unbind(dim=-2)
 
@@ -99,13 +107,15 @@ class FeedForward(nn.Module):
         self.n_order = n_order
         self.hidden_dim = hidden_dim if hidden_dim is not None else emb_dim
         self.W1 = nn.Parameter(
-            nn.init.xavier_normal_(torch.randn(emb_dim, self.hidden_dim))
+            nn.init.kaiming_uniform_(torch.randn(emb_dim, self.hidden_dim))
         )
         self.b1 = nn.Parameter(torch.zeros(self.hidden_dim))
         self.W2 = nn.Parameter(
-            nn.init.xavier_normal_(torch.randn(self.hidden_dim, n_order * emb_dim))
+            nn.init.kaiming_uniform_(torch.randn(self.hidden_dim, n_order * emb_dim))
         )
         self.b2 = nn.Parameter(torch.zeros(n_order * emb_dim))
+
+        self.layer_norm = nn.LayerNorm(self.hidden_dim)
 
         if activation == 'gelu':
             self.activation = F.gelu
@@ -124,6 +134,7 @@ class FeedForward(nn.Module):
 
     def forward(self, inputs):
         x = torch.matmul(inputs, self.W1) + self.b1
+        x = self.layer_norm(x)
         x = self.activation(x)
         x = torch.matmul(x, self.W2) + self.b2
         return x
@@ -136,6 +147,7 @@ class HyenaFilter(nn.Module):
         self.n_order = n_order
         self.ffn = FeedForward(emb_dim, n_order=n_order)
         self.theta_vector = compute_theta_vector(emb_dim)
+        self.epsilon = 1e-8  # Small value to avoid division by zero
 
     def forward(self, embeddings, positions):
         rotation_matrices = compute_rotation_angles(
@@ -147,12 +159,13 @@ class HyenaFilter(nn.Module):
         h_hat = h_hat.view(
             h_hat.size(0), h_hat.size(1), self.n_order, self.emb_dim
         )
+
         # reshape to batch_size x N x D x L
         h_hat = h_hat.permute(0, 2, 3, 1)
         # # reshape to batch_size x N x L x D
         # h_hat = h_hat.permute(0, 2, 1, 3)
         # Normalise h_hat along the channel dimension D.
-        h_hat = h_hat / h_hat.norm(p=1, dim=-2, keepdim=True)
+        h_hat = h_hat / (h_hat.norm(p=1, dim=-2, keepdim=True) + self.epsilon)
         # split h_hat into h1, h2, ..., hN
         h = h_hat.unbind(dim=-3)
 
@@ -170,14 +183,21 @@ class FFTLongConv(nn.Module):
         inputs_padded = F.pad(inputs, (0, padded_length - L))
         filters_padded = F.pad(filters, (0, padded_length - L))
         # Perform FFT
-        inputs_fft = torch.fft.rfft(inputs_padded, n=padded_length)
-        filters_fft = torch.fft.rfft(filters_padded, n=padded_length)
+        inputs_fft = torch.fft.rfft(
+            inputs_padded, n=padded_length, dim=-1, norm='forward'
+        )
+        filters_fft = torch.fft.rfft(
+            filters_padded, n=padded_length, dim=-1, norm='forward'
+        )
         # Element-wise multiplication in the frequency domain
         product_fft = inputs_fft * filters_fft
         # Inverse FFT to get the convolution result
-        result = torch.fft.irfft(product_fft, n=padded_length)
+        result = torch.fft.irfft(
+            product_fft, n=padded_length, dim=-1, norm='forward'
+        )
         # Remove padding
         result_real = result[..., :L]
+
         return result_real
 
 
@@ -191,24 +211,24 @@ class HyenaBlock(nn.Module):
         self.filter = HyenaFilter(emb_dim, n_order)
         self.fft_long_conv = FFTLongConv()
         self.output_projection = nn.Parameter(
-            nn.init.xavier_normal_(torch.randn(emb_dim, emb_dim))
+            nn.init.kaiming_uniform_(torch.randn(emb_dim, emb_dim))
+        )
+        # TODO ADD BIAS TERM AND RESIDUALS.
+        self.B = nn.Parameter(
+            nn.init.kaiming_uniform_(torch.randn((n_order, 1, emb_dim, 1)))
         )
 
     def forward(self, embeddings, positions):
         *x, v = self.projection(embeddings, positions)
-        # TODO residuals not in original model - testing will be needed to see
-        #  if they are necessary.
-        # # Residual connection
-        # v = v + inputs[0].transpose(1, 2)
         filters = self.filter(embeddings, positions)
 
         for i, x_i in enumerate(x):
             h_i = filters[i]
-            v = x_i.norm(1, dim=-2, keepdim=True) * self.fft_long_conv(v, h_i)
+            v = x_i * (v * self.B[i] + self.fft_long_conv(v, h_i))
 
         # Transpose v to shape (batch_size, seq_len, emb_dim)
         v = v.transpose(2, 1)
-        # # Residual connection.
+        # # Residual connection added as gradients might have been vanishing.
         # output = v + v.matmul(self.output_projection)
         output = v.matmul(self.output_projection)
 

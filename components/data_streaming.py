@@ -8,6 +8,7 @@ from components.extract_reads import (
     extract_reads_from_position_onward, sample_positions, get_read_info
 )
 
+import logging
 
 def replicate_binary_flag_vector_list(
         binary_flag_vector, sequence_length
@@ -177,12 +178,14 @@ def create_data_loader(
 
 
 nucleotide_to_index = {
-    '': -1, 'A': 0, 'C': 1, 'G': 2, 'T': 3, 'R': 4, 'Y': 5, 'S': 6, 'W': 7,
-    'K': 8, 'M': 9, 'B': 10, 'D': 11, 'H': 12, 'V': 13, 'N': 14
+    'A': 0, 'C': 1, 'G': 2, 'T': 3, 'R': 4, 'Y': 5, 'S': 6, 'W': 7,
+    'K': 8, 'M': 9, 'B': 10, 'D': 11, 'H': 12, 'V': 13, 'N': 14, '': 15
 }
 
 def encode_nucleotides(sequence):
-    return [nucleotide_to_index[nuc] for nuc in sequence]
+    # Handle case where base is not in the lookup table
+    return [nucleotide_to_index.get(nuc, 15) for nuc in sequence]
+
 
 
 def collate_fn(batch):
@@ -215,16 +218,16 @@ def collate_fn(batch):
     return batched_data
 
 
-# Example usage
-data_loader = create_data_loader(
-    file_paths='TEST_DATA', metadata_path='TEST_DATA/test_metadata.csv',
-    nucleotide_threshold=1024*8, batch_size=4, shuffle=True
-)
-
-# Iterate through data
-for batch in data_loader:
-    print(batch)  # Process your batch here
-    break
+# # Example usage
+# data_loader = create_data_loader(
+#     file_paths='TEST_DATA', metadata_path='TEST_DATA/test_metadata.csv',
+#     nucleotide_threshold=1024*8, batch_size=4, shuffle=True
+# )
+#
+# # Iterate through data
+# for batch in data_loader:
+#     print(batch)  # Process your batch here
+#     break
 
 
 

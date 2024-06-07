@@ -1,4 +1,10 @@
+from typing import Any
+
 import torch
+import torch.nn as nn
+import torch.nn.functional as F
+from torch import Tensor
+
 
 # Nucleotide index look up
 
@@ -109,6 +115,135 @@ class NucleotidePerturbation:
         )
 
 
+# def replacement_loss(
+#         predictions, original_sequences, corrupted_sequences, padding_idx=15
+# ):
+#     # Create a tensor signifying which elements have been replaced
+#     replacement_mask = (original_sequences != corrupted_sequences).float()
+#     valid_mask = (original_sequences != padding_idx).float()
+#
+#     # True labels: 1 for replaced, 0 for original
+#     true_labels = replacement_mask
+#
+#     # Calculate class weights based on the imbalance
+#     num_replaced = replacement_mask.sum()
+#     num_original = valid_mask.sum() - num_replaced
+#     total_elements = valid_mask.sum()
+#
+#     weight_replaced = total_elements / (2 * num_replaced)
+#     weight_original = total_elements / (2 * num_original)
+#
+#     weights = true_labels * weight_replaced + (1 - true_labels) * weight_original
+#
+#     # Apply valid mask to ignore padding elements
+#     predictions = predictions * valid_mask
+#
+#     # Compute the binary cross-entropy loss with class weights
+#     loss = F.binary_cross_entropy(predictions, true_labels, weight=weights, reduction='none')
+#
+#     # Compute the average loss over valid elements
+#     average_loss = loss.sum() / valid_mask.sum()
+#
+#     return average_loss
+
+def replacement_loss(replacement_mask, predictions):
+    # True labels: 1 for replaced, 0 for original
+    true_labels = replacement_mask.float()
+
+    # Calculate class weights based on the imbalance
+    num_replaced = replacement_mask.sum()
+    num_original = (~replacement_mask).sum()
+    total_elements = replacement_mask.numel()
+
+    weight_replaced = total_elements / (2 * num_replaced)
+    weight_original = total_elements / (2 * num_original)
+
+    weights = true_labels * weight_replaced + (1 - true_labels) * weight_original
+
+    # Compute the binary cross-entropy loss with class weights
+    loss = F.binary_cross_entropy(predictions, true_labels, weight=weights, reduction='none')
+
+    # Compute the average loss over valid elements
+    average_loss = loss.sum() / total_elements
+
+    return average_loss
+
+import torch.nn.functional as F
+
+def adversarial_loss(predictions, replacement_mask):
+    # True labels: 1 for replaced, 0 for original
+    true_labels = torch.zeros_like(predictions)
+    true_labels[replacement_mask] = 1
+
+    # Calculate correct predictions mask
+    correct_mask = (predictions.round() == true_labels).float() * replacement_mask
+
+    adv_labels = 1 - true_labels
+
+    # Adversarial loss is higher if the main model gets more predictions correct
+    loss = F.binary_cross_entropy(predictions, adv_labels, weight=correct_mask + 1)
+    return loss
+
+
+def generate_random_for_unique_positions(positions):
+    batch_size, seq_length = positions.size()
+    unique_values = []
+    unique_randoms = []
+
+    for i in range(batch_size):
+        seq = positions[i]
+        unique_vals, inverse_indices = torch.unique(
+            seq[seq != -1], return_inverse=True
+        )
+        lognorms = torch.distributions.LogNormal(
+            0, 1
+        ).sample((unique_vals.size(0),))
+        random_vals = 1 - lognorms
+
+        unique_values.append(unique_vals)
+        unique_randoms.append(random_vals)
+
+    return unique_values, unique_randoms
+
+def broadcast_unique_randoms_to_input(
+        positions, unique_values, unique_randoms
+):
+    batch_size, seq_length = positions.size()
+    broadcasted_randoms = torch.zeros_like(positions, dtype=torch.float)
+
+    for i in range(batch_size):
+        seq = positions[i]
+        valid_mask = seq != -1
+        inverse_indices = torch.searchsorted(
+            unique_values[i], seq[valid_mask]
+        )
+        broadcasted_randoms[i][valid_mask] = unique_randoms[i][
+            inverse_indices
+        ]
+
+    return broadcasted_randoms
+
+
+def get_replacement_mask(positions, rate=0.15):
+    unique_values, unique_randoms = generate_random_for_unique_positions(
+        positions
+    )
+    broadcasted_randoms = broadcast_unique_randoms_to_input(
+        positions, unique_values, unique_randoms
+    )
+    valid_mask = positions != -1
+    # Generate random numbers for each valid position in the sequence
+    element_limit = 1 / broadcasted_randoms
+    element_randoms = torch.rand(
+        positions.shape, device=positions.device, dtype=torch.float32
+    ) * (1 - broadcasted_randoms) + broadcasted_randoms
+    product = element_randoms * broadcasted_randoms * element_limit
+    # Create a replacement mask based on the threshold
+    replace_mask = product < rate
+    replace_mask = replace_mask & valid_mask
+
+    return replace_mask
+
 
 # # TEST SCRIPTS.
 # from components.data_streaming import create_data_loader
@@ -152,7 +287,7 @@ class NucleotidePerturbation:
 #
 #
 # plot_nucleotide_replacement_histogram(nucleotide_sequences, corrupted_sequences, positions)
-#
+
 
 ### OLD TENSOFRLOW IMPLEMENTATION
 # import tensorflow as tf

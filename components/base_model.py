@@ -1,15 +1,19 @@
+import torch
 import torch.nn as nn
 
 # TODO fix the import statements
 from components.hyena import HyenaBlock, FeedForward
 from components.self_attention import MultiHeadSelfAttention
 
-
 class TransformerBlock(nn.Module):
     def __init__(self, emb_dim, heads, hyena=False, kernel_size=3):
         super(TransformerBlock, self).__init__()
-        self.layer_norm1 = nn.LayerNorm(emb_dim)
-        self.layer_norm2 = nn.LayerNorm(emb_dim)
+        self.layer_norm1 = nn.LayerNorm(emb_dim, eps=1e-7)
+        nn.init.ones_(self.layer_norm1.weight)
+        nn.init.zeros_(self.layer_norm1.bias)
+        self.layer_norm2 = nn.LayerNorm(emb_dim, eps=1e-7)
+        nn.init.ones_(self.layer_norm2.weight)
+        nn.init.zeros_(self.layer_norm2.bias)
         self.feed_forward = FeedForward(
             emb_dim, hidden_dim=emb_dim * 2, activation="mish"
         )
@@ -25,18 +29,125 @@ class TransformerBlock(nn.Module):
 
     def forward(self, x, positions):
         # x: input tensor of shape (batch_size, seq_length, emb_dim)
+        if torch.isnan(x).any() or torch.isinf(x).any():
+            print("NaNs/Infs detected in input x before first layer norm")
+            breakpoint()
 
-        # Apply layer normalisation before self-attention
+        # Apply layer normalization before self-attention
         normed_x = self.layer_norm1(x)
+        if torch.isnan(normed_x).any() or torch.isinf(normed_x).any():
+            print("NaNs/Infs detected after first layer norm")
+            breakpoint()
+
         self_attention_output = self.self_attention(normed_x, positions)
+        if torch.isnan(self_attention_output).any() or torch.isinf(self_attention_output).any():
+            print("NaNs/Infs detected after self attention")
+            breakpoint()
+
         x = x + self_attention_output
 
-        # Apply layer normalisation before feedforward network
+        if torch.isnan(x).any() or torch.isinf(x).any():
+            print("NaNs/Infs detected after adding self attention output")
+            breakpoint()
+
+        # Check the range of x before the second normalization
+        x_min, x_max = x.min().item(), x.max().item()
+        # print(f"x range before second layer norm: min={x_min}, max={x_max}")
+
+        # Apply layer normalization before feedforward network
         normed_x = self.layer_norm2(x)
+        if torch.isnan(normed_x).any() or torch.isinf(normed_x).any():
+            print("NaNs/Infs detected after second layer norm")
+            breakpoint()
+
         ff_output = self.feed_forward(normed_x)
+        if torch.isnan(ff_output).any() or torch.isinf(ff_output).any():
+            print("NaNs/Infs detected after feedforward network")
+            breakpoint()
+
         x = x + ff_output
+        if torch.isnan(x).any() or torch.isinf(x).any():
+            print("NaNs/Infs detected after adding feedforward output")
+            breakpoint()
 
         return x
+
+# class TransformerBlock(nn.Module):
+#     def __init__(self, emb_dim, heads, hyena=False, kernel_size=3):
+#         super(TransformerBlock, self).__init__()
+#         self.layer_norm1 = nn.LayerNorm(emb_dim, eps=1e-7)
+#         nn.init.ones_(self.layer_norm1.weight)
+#         nn.init.zeros_(self.layer_norm1.bias)
+#         self.layer_norm2 = nn.LayerNorm(emb_dim, eps=1e-7)
+#         nn.init.ones_(self.layer_norm2.weight)
+#         nn.init.zeros_(self.layer_norm2.bias)
+#         self.feed_forward = FeedForward(
+#             emb_dim, hidden_dim=emb_dim * 2, activation="gelu"
+#         )
+#         self.hyena = hyena
+#         if hyena:
+#             self.self_attention = HyenaBlock(
+#                 emb_dim, n_order=heads, kernel_size=kernel_size
+#             )
+#         else:
+#             self.self_attention = MultiHeadSelfAttention(
+#                 emb_dim, num_heads=heads
+#             )
+#
+#     def forward(self, x, positions):
+#         # x: input tensor of shape (batch_size, seq_length, emb_dim)
+#         if torch.isnan(x).any():
+#             breakpoint()
+#         # Apply layer normalisation before self-attention
+#         normed_x = self.layer_norm1(x)
+#         if torch.isnan(normed_x).any():
+#             breakpoint()
+#         self_attention_output = self.self_attention(normed_x, positions)
+#         if torch.isnan(self_attention_output).any():
+#             breakpoint()
+#         x = x + self_attention_output
+#
+#         if torch.isnan(x).any():
+#             breakpoint()
+#
+#         # Apply layer normalisation before feedforward network
+#         normed_x = self.layer_norm2(x)  # Nans occur here.
+#         if torch.isnan(normed_x).any():
+#             breakpoint()
+#         ff_output = self.feed_forward(normed_x)
+#         if torch.isnan(ff_output).any():
+#             breakpoint()
+#
+#         x = x + ff_output
+#         if torch.isnan(x).any():
+#             breakpoint()
+#
+#         return x
+
+
+class Model(nn.Module):
+    def __init__(self, emb_dim, heads, num_layers, hyena=False, kernel_size=3):
+        super(Model, self).__init__()
+        self.emb_dim = emb_dim
+        self.heads = heads
+        self.num_layers = num_layers
+        self.hyena = hyena
+        self.kernel_size = kernel_size
+
+        self.layers = nn.ModuleList(
+            [
+                TransformerBlock(
+                    emb_dim, heads, hyena=hyena, kernel_size=kernel_size
+                )
+                for _ in range(num_layers)
+            ]
+        )
+
+    def forward(self, x, positions):
+        for layer in self.layers:
+            x = layer(x, positions)
+        return x
+
 
 # # Example usage:
 # import torch
