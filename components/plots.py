@@ -5,6 +5,16 @@ import numpy as np
 
 
 def plot_mapping_and_base_quality_histogram(final_dict, log_scale=False):
+    """
+    Plot the distribution of mapping quality and base quality scores.
+
+    :param final_dict:
+        A dictionary containing mapping and base quality scores for reads.
+    :param log_scale:
+        A boolean indicating whether to use a logarithmic scale for the y-axis.
+    :returns:
+        None
+    """
     # initialise the lattice plot
     fig, axs = plt.subplots(1, 2, figsize=(20, 10))
 
@@ -85,7 +95,21 @@ def plot_nucleotide_coverage(read_dict, position) -> None:
     plt.show()
 
 
-def plot_replacement_statistics(original_sequences, corrupted_sequences, positions):
+def plot_replacement_statistics(
+        original_sequences, corrupted_sequences, positions
+):
+    """
+    Plot statistics on the replacement of nucleotides in sequences.
+
+    :param original_sequences:
+        A tensor of the original nucleotide sequences.
+    :param corrupted_sequences:
+        A tensor of the corrupted nucleotide sequences.
+    :param positions:
+        A tensor of the positions in the sequences.
+    :returns:
+        None
+    """
     batch_size, seq_length = original_sequences.size()
 
     replacement_counts = []
@@ -96,8 +120,14 @@ def plot_replacement_statistics(original_sequences, corrupted_sequences, positio
         for pos in unique_positions:
             if pos == -1:
                 continue
-            original_count = torch.sum((positions[i] == pos) & (original_sequences[i] == corrupted_sequences[i])).item()
-            replaced_count = torch.sum((positions[i] == pos) & (original_sequences[i] != corrupted_sequences[i])).item()
+            original_count = torch.sum(
+                (positions[i] == pos) &
+                (original_sequences[i] == corrupted_sequences[i])
+            ).item()
+            replaced_count = torch.sum(
+                (positions[i] == pos) &
+                (original_sequences[i] != corrupted_sequences[i])
+            ).item()
             proportion = replaced_count / (original_count + replaced_count)
             if replaced_count > 0:
                 replacement_counts.append(replaced_count)
@@ -118,8 +148,18 @@ def plot_replacement_statistics(original_sequences, corrupted_sequences, positio
 def plot_nucleotide_replacement_histogram(
         original_sequences, corrupted_sequences, positions
 ):
+    """
+    Plot a histogram of nucleotide replacements across sequences.
 
-
+    :param original_sequences:
+        A tensor of the original nucleotide sequences.
+    :param corrupted_sequences:
+        A tensor of the corrupted nucleotide sequences.
+    :param positions:
+        A tensor of the positions in the sequences.
+    :returns:
+        None
+    """
     batch_size, seq_length = original_sequences.size()
     fig, axes = plt.subplots(batch_size, 1, sharex=True)
 
@@ -152,7 +192,9 @@ def plot_nucleotide_replacement_histogram(
         })
 
         # Plot stacked bar chart
-        df.set_index('Position').plot(kind='bar', stacked=True, ax=axes[i], color=['blue', 'red'])
+        df.set_index('Position').plot(
+            kind='bar', stacked=True, ax=axes[i], color=['blue', 'red']
+        )
         axes[i].set_title(f"Sequence {i + 1}")
         axes[i].set_xlabel('Position')
         axes[i].set_ylabel('Count')

@@ -1,10 +1,6 @@
-
-import matplotlib.pyplot as plt
 import numpy as np
-import tensorflow as tf
 import pysam
 import re
-import random
 
 
 def estimate_initial_window(
@@ -46,12 +42,17 @@ def extract_reads_from_position_onward(
     until a nucleotide threshold is reached. A sample coverage can be specified
     to randomly select reads to match the desired coverage.
 
-    :param bam_file_path: Path to the BAM file.
-    :param chromosome: Chromosome name.
-    :param position: Starting genomic position.
-    :param nucleotide_threshold: Nucleotide coverage threshold.
+    :param bam_file_path:
+        Path to the BAM file.
+    :param chromosome:
+        Chromosome name.
+    :param position:
+        Starting genomic position.
+    :param nucleotide_threshold:
+        Nucleotide coverage threshold.
 
-    :return: A dictionary of reads fetched from the BAM file.
+    :return:
+        A dictionary of reads fetched from the BAM file.
     """
 
     bam_file = pysam.AlignmentFile(bam_file_path, "rb")
@@ -63,8 +64,8 @@ def extract_reads_from_position_onward(
     ):
         if total_nucleotides + read.query_length > nucleotide_threshold:
             break  # Stop if the next read exceeds the threshold
-
-        if read.query_name not in fetched_reads:  # Check for read ID instead of read object
+        # Check for read ID instead of read object
+        if read.query_name not in fetched_reads:
             fetched_reads[read.query_name] = {
                 "bitwise_flags": read.flag,
                 "reference_start": read.reference_start,
@@ -165,24 +166,6 @@ def decode_binary_flags_to_vector(flags, num_flags=12):
     return binary_vector
 
 
-# def decode_bq_to_numerical(bq_string):
-#     """
-#     Decode a 'BQ' quality score string (ASCII characters) into a numerical
-#     vector of Phred scores.
-#
-#     :param bq_string: A string representing the 'BQ' quality scores in ASCII
-#         encoding.
-#
-#     :return numerical_scores: A list of integers representing the Phred quality
-#         scores.
-#     """
-#     # Convert each character in the BQ string to its Phred quality score
-#     numerical_scores = [ord(char) - 33 for char in bq_string]
-#     # convert to probabilities
-#     numerical_scores = [10 ** (-score / 10) for score in numerical_scores]
-#     return numerical_scores
-
-
 def cigar_to_binary_vector(cigar, read_length):
     """
     Decode a CIGAR string into a binary vector.
@@ -259,15 +242,16 @@ def sample_positions(n, sex):
     if sex == "male":
         chromosome_ranges['Y'] = (24, 57227415)
 
-    # Randomly sample positions from the genome giving each chromosome a probability
-    # proportional to its length
+    # Randomly sample positions from the genome giving each chromosome a
+    # probability proportional to its length
     chromosome_probs = np.array([val[1] for val in chromosome_ranges.values()])
     chromosome_probs = chromosome_probs / chromosome_probs.sum()
     chromosome_names = list(chromosome_ranges.keys())
     random_chromosomes = np.random.choice(
         chromosome_names, size=n, p=chromosome_probs
     )
-    # Randomly sample positions (given by the chromosome_ranges) from each chromosome
+    # Randomly sample positions (given by the chromosome_ranges) from each
+    # chromosome
     random_positions = [
         np.random.randint(chromosome_ranges[chromosome][1])
         for chromosome in random_chromosomes
@@ -315,20 +299,3 @@ def get_read_info(read_dict):
         }
 
     return final_dict
-
-
-
-# #
-# bam_file_path = 'TEST_DATA/HG002.GRCh38.2x250.bam'
-#
-# positions = sample_positions(2, sex='male')
-#
-# read_dict = extract_reads_from_position_onward(
-#     bam_file_path, 'chr' + positions[1][0], positions[1][1], 1024*12
-# )
-#
-# read_info = get_read_info(read_dict)
-#
-# from components.plots import plot_nucleotide_coverage, plot_mapping_and_base_quality_histogram
-#
-# plot_nucleotide_coverage(read_dict, positions[1][1])

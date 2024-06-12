@@ -1,4 +1,6 @@
 
+### IGNORE - OLD TENSORFLOW CODE - MOVED TO PYTORCH
+
 import tensorflow as tf
 from self_attention import EncoderBlock
 from read_embedding import NucleotideEmbeddingLayer, MetricEmbedding
@@ -6,12 +8,15 @@ from read_embedding import NucleotideEmbeddingLayer, MetricEmbedding
 
 def extract_unique_positions(tensor):
     """
-    Extracts unique elements from each sequence in the batch, along with indices.
+    Extracts unique elements from each sequence in the batch, along with
+    indices.
 
-    :param tensor: A 2D tensor of shape [batch_size, sequence_length].
-    :return: A tuple of a RaggedTensor and a tensor, where the first element contains
-             the unique elements of each sequence, and the second element contains
-             the indices of the original elements.
+    :param tensor:
+        A 2D tensor of shape [batch_size, sequence_length].
+    :return:
+        A tuple of a RaggedTensor and a tensor, where the first element contains
+        the unique elements of each sequence, and the second element contains
+        the indices of the original elements.
     """
 
     def get_unique(sequence):
