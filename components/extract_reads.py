@@ -1,6 +1,10 @@
 import numpy as np
 import pysam
 import re
+import random
+
+from typing import Dict, List, Optional, Tuple
+
 
 
 def estimate_initial_window(
@@ -35,7 +39,7 @@ def estimate_initial_window(
 
 
 def extract_reads_from_position_onward(
-        bam_file_path, chromosome, position, nucleotide_threshold
+        bam_file_path, chromosome, position, nucleotide_threshold, min_quality=0
 ) -> dict:
     """
     Iteratively extract reads from a BAM file starting at a given position,
@@ -62,6 +66,8 @@ def extract_reads_from_position_onward(
     for read in bam_file.fetch(
             chromosome, position, position + nucleotide_threshold
     ):
+        if read.mapping_quality < min_quality:
+            continue
         if total_nucleotides + read.query_length > nucleotide_threshold:
             break  # Stop if the next read exceeds the threshold
         # Check for read ID instead of read object
@@ -83,7 +89,7 @@ def extract_reads_from_position_onward(
 
 
 def extract_reads_around_position(
-        bam_file_path, chromosome, position, nucleotide_threshold
+        bam_file_path, chromosome, position, nucleotide_threshold, min_quality=0
 ) -> dict:
     """
     Extract reads and their metadata from a BAM file around a given genomic
@@ -119,6 +125,8 @@ def extract_reads_around_position(
     # Construct the dictionary from the fetched reads
     read_dict = {}
     for read in fetched_reads:
+        if read.mapping_quality < min_quality:
+            continue
         read_dict[read.query_name] = {
             "bitwise_flags": read.flag,
             # "reference_name": bam_file.get_reference_name(read.reference_id),
@@ -299,3 +307,110 @@ def get_read_info(read_dict):
         }
 
     return final_dict
+
+#
+# def sample_reads_from_bam(
+#         bam_file_path: str,
+#         chromosome: str,
+#         position: int,
+#         ref_allele: str,
+#         alt_allele: str,
+#         alt_support_counts: List[int],
+#         depths: List[int],
+#         max_nucleotides: int,
+#         mapq_threshold: int,
+#         matched_normal_bam_file_path: Optional[str] = None
+# ) -> Dict[Tuple[int, int], List[str]]:
+#     """
+#     Sample reads from a BAM file at a specific position with specified depth and
+#     nucleotide support.
+#
+#     :param bam_file_path:
+#         Path to the BAM file.
+#     :param chromosome:
+#         Chromosome name.
+#     :param position:
+#         Genomic position.
+#     :param ref_allele:
+#         Reference allele at the position.
+#     :param alt_allele:
+#         Alternate allele at the position.
+#     :param alt_support_counts:
+#         List of counts of reads supporting the alternate allele.
+#     :param depths:
+#         List of total depths of reads to sample.
+#     :param max_nucleotides:
+#         Maximum number of nucleotides to extract.
+#     :param mapq_threshold:
+#         Minimum mapping quality to include a read.
+#     :param matched_normal_bam_file_path:
+#         Optional path to a matched normal BAM file.
+#     :return:
+#         Dictionary with keys as (alt_support_count, depth) and values as lists of read IDs.
+#     """
+#     bam_file = pysam.AlignmentFile(bam_file_path, "rb")
+#     normal_bam_file = pysam.AlignmentFile(matched_normal_bam_file_path, "rb") if matched_normal_bam_file_path else None
+#
+#     reads = []
+#     total_nucleotides = 0
+#
+#     # Function to fetch and process reads from a BAM file
+#     def fetch_reads(bam, chrom, pos):
+#         nonlocal reads, total_nucleotides
+#         for read in bam.fetch(chrom, pos - 1, pos):
+#             if total_nucleotides >= max_nucleotides:
+#                 break
+#
+#             if read.mapping_quality < mapq_threshold:
+#                 continue
+#
+#             read_position = read.get_reference_positions()
+#             if pos - 1 in read_position:
+#                 reads.append(read)
+#
+#             total_nucleotides += read.query_length
+#
+#     # Fetch reads from the tumor BAM file
+#     fetch_reads(bam_file, chromosome, position)
+#
+#     # If matched normal BAM file is provided and additional reads are needed
+#     if matched_normal_bam_file_path:
+#         fetch_reads(normal_bam_file, chromosome, position)
+#
+#     bam_file.close()
+#     if normal_bam_file:
+#         normal_bam_file.close()
+#
+#     # Filter reads based on reference and alternate alleles
+#     alt_reads = [
+#         read for read in reads if
+#         read.query_sequence[
+#             read.get_reference_positions().index(position - 1)
+#         ] == alt_allele
+#     ]
+#     ref_reads = [
+#         read for read in reads if
+#         read.query_sequence[
+#             read.get_reference_positions().index(position - 1)
+#         ] == ref_allele
+#     ]
+#
+#     read_id_dict = {}
+#
+#     # Create permutations of alt_support_counts and depths
+#     for alt_support in alt_support_counts:
+#         for depth in depths:
+#             if alt_support > len(alt_reads):
+#                 continue
+#
+#             combinations = []
+#             for i in range(alt_support):
+#                 alt_sample = random.sample(alt_reads, alt_support)
+#                 ref_sample = random.sample(ref_reads, depth - alt_support)
+#                 combinations.append(
+#                     [read.query_name for read in alt_sample + ref_sample]
+#                 )
+#
+#             read_id_dict[(alt_support, depth)] = combinations
+#
+#     return read_id_dict

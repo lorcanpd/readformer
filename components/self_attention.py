@@ -38,14 +38,40 @@ class MultiHeadSelfAttention(nn.Module):
         self.value = nn.Linear(emb_dim, emb_dim)
         self.out = nn.Linear(emb_dim, emb_dim)
 
+        # Initialise scaling vectors
+        self.query_scale = nn.Parameter(torch.ones(1, 1, emb_dim))
+        self.key_scale = nn.Parameter(torch.ones(1, 1, emb_dim))
+        self.value_scale = nn.Parameter(torch.ones(1, 1, emb_dim))
+        self.out_scale = nn.Parameter(torch.ones(1, 1, emb_dim))
+
+
+        # For rotary encoding
         self.theta_vector = compute_theta_vector(self.head_dim)
+
+    def init_scaling_vectors(self):
+        nn.init.ones_(self.query_scale)
+        nn.init.ones_(self.key_scale)
+        nn.init.ones_(self.value_scale)
+        nn.init.ones_(self.out_scale)
+
+    def freeze_scaling_vectors(self):
+        self.query_scale.requires_grad = False
+        self.key_scale.requires_grad = False
+        self.value_scale.requires_grad = False
+        self.out_scale.requires_grad = False
+
+    def unfreeze_scaling_vectors(self):
+        self.query_scale.requires_grad = True
+        self.key_scale.requires_grad = True
+        self.value_scale.requires_grad = True
+        self.out_scale.requires_grad = True
 
     def forward(self, x, positions):
         batch_size, seq_length, emb_dim = x.size()
         # Linear projections
-        Q = self.query(x)
-        K = self.key(x)
-        V = self.value(x)
+        Q = self.query(x) * self.query_scale
+        K = self.key(x) * self.key_scale
+        V = self.value(x) * self.value_scale
         # Reshape for multi-head attention
         Q = Q.view(batch_size, seq_length, self.num_heads, self.head_dim)
         K = K.view(batch_size, seq_length, self.num_heads, self.head_dim)
@@ -93,6 +119,6 @@ class MultiHeadSelfAttention(nn.Module):
         context = context.permute(0, 2, 1, 3).contiguous().view(
             batch_size, seq_length, self.emb_dim
         )
-        output = self.out(context)
+        output = self.out(context) * self.out_scale
 
         return output

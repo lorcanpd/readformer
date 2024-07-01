@@ -84,7 +84,7 @@ class MetricEmbedding(nn.Module):
 
 
 class NucleotideEmbeddingLayer(nn.Module):
-    def __init__(self, embedding_dim):
+    def __init__(self, embedding_dim, mlm_mode=False):
         """
         Initialises the nucleotide embedding layer.
 
@@ -92,15 +92,17 @@ class NucleotideEmbeddingLayer(nn.Module):
             The dimensionality of the embedding space.
         """
         super(NucleotideEmbeddingLayer, self).__init__()
+
         self.embedding_dim = embedding_dim
-        num_nucleotides = 16  # Total number of unique nucleotide representations
-        self.padding_idx = num_nucleotides - 1
+        self.mlm_mode = mlm_mode
+        num_nucleotides = 16 if mlm_mode else 15
+        self.mask_index = num_nucleotides if mlm_mode else None
+        self.padding_idx = 15 if mlm_mode else 14  # The padding index is always 15
         self.embedding = nn.Embedding(
-            num_embeddings=num_nucleotides,  # Include padding
+            num_embeddings=num_nucleotides + (1 if mlm_mode else 0),
             embedding_dim=embedding_dim,
-            padding_idx=self.padding_idx
+            padding_idx=self.padding_idx,
         )
-        nn.init.kaiming_normal_(self.embedding.weight)
 
     def forward(self, inputs):
         """

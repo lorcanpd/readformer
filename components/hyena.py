@@ -171,6 +171,9 @@ class FeedForward(nn.Module):
         )
         self.b2 = nn.Parameter(torch.zeros(n_order * emb_dim))
 
+        # Initialise scaling vector
+        self.ff_scale = nn.Parameter(torch.ones(1, 1, n_order * emb_dim))
+
         self.layer_norm = nn.LayerNorm(self.hidden_dim)
 
         if activation == 'gelu':
@@ -188,6 +191,15 @@ class FeedForward(nn.Module):
         else:
             raise ValueError(f"Unsupported activation function: {activation}")
 
+    def init_scaling_vector(self):
+        nn.init.ones_(self.ff_scale)
+
+    def freeze_scaling_vector(self):
+        self.ff_scale.requires_grad = False
+
+    def unfreeze_scaling_vector(self):
+        self.ff_scale.requires_grad = True
+
     def forward(self, inputs):
         """
         Perform the forward pass of the feed-forward layer.
@@ -201,6 +213,7 @@ class FeedForward(nn.Module):
         x = self.layer_norm(x)
         x = self.activation(x)
         x = torch.matmul(x, self.W2) + self.b2
+        x = x * self.ff_scale
         return x
 
 

@@ -131,10 +131,13 @@ for i, interval in enumerate(intervals):
     data_loader = create_data_loader(
         file_paths=data_dir,
         metadata_path=metadata_path,
-        nucleotide_threshold=interval, max_sequence_length=max_sequence_length,
+        nucleotide_threshold=interval,
+        max_sequence_length=max_sequence_length,
         batch_size=batch_size,
         min_quality=min_read_quality,
-        shuffle=True
+        shuffle=True,
+        num_workers=4,
+        prefetch_factor=2
     )
     data_loaders.append(data_loader)
 

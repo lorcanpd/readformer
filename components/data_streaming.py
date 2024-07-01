@@ -1,6 +1,6 @@
 
 import os
-import random
+# import random
 import pandas as pd
 import torch
 from torch.utils.data import Dataset, DataLoader, Sampler
@@ -44,7 +44,7 @@ class BAMReadDataset(Dataset):
     """
     def __init__(
             self, file_paths, metadata_path, nucleotide_threshold,
-            selected_positions=False
+            max_sequence_length, selected_positions=False, min_quality=0
     ):
         """
         Initialise the dataset with file paths and metadata.
@@ -54,12 +54,18 @@ class BAMReadDataset(Dataset):
         :param metadata_path:
             Path to the metadata file containing sample information.
         :param nucleotide_threshold:
-            Nucleotide coverage threshold.
+            Nucleotide coverage threshold. This is the maximum sequence length
+            to be generated.
+        :param max_sequence_length:
+            The sequence length dimension the model expects. Sequences will be
+            padded to this length.
         """
 
         self.nucleotide_threshold = nucleotide_threshold
+        self.max_sequence_length = max_sequence_length
         self.metadata = pd.read_csv(metadata_path)
         self.selected_positions = selected_positions
+        self.min_quality = min_quality
         if os.path.isdir(file_paths):
             self.file_paths = [
                 os.path.join(file_paths, f) for f in os.listdir(file_paths)
@@ -84,7 +90,7 @@ class BAMReadDataset(Dataset):
             positions = sample_positions(1, sex)
             read_dict = extract_reads_from_position_onward(
                 file_path, 'chr' + positions[0][0], positions[0][1],
-                self.nucleotide_threshold
+                self.nucleotide_threshold, self.min_quality
             )
             if read_dict:
                 read_info = get_read_info(read_dict)
@@ -119,7 +125,7 @@ class BAMReadDataset(Dataset):
             total_sequence_length += sequence_length
 
         # Pad sequences to the threshold length
-        padding_length = self.nucleotide_threshold - total_sequence_length
+        padding_length = self.max_sequence_length - total_sequence_length
         nucleotide_sequences += [''] * (padding_length)
         base_qualities += [0.0] * (padding_length)
         read_qualities += [0.0] * (padding_length)
@@ -141,6 +147,7 @@ class BAMReadDataset(Dataset):
 
 class InfiniteSampler(Sampler):
     def __init__(self, data_source, shuffle=True):
+        super().__init__(data_source)
         self.data_source = data_source
         self.shuffle = shuffle
 
@@ -152,8 +159,8 @@ class InfiniteSampler(Sampler):
 
 
 def create_data_loader(
-        file_paths, metadata_path, nucleotide_threshold, batch_size,
-        shuffle=True
+        file_paths, metadata_path, nucleotide_threshold, max_sequence_length,
+        batch_size, min_quality, shuffle=True, num_workers=4, prefetch_factor=2
 ):
     """
     Create a DataLoader for batch processing of BAM file reads.
@@ -164,6 +171,8 @@ def create_data_loader(
         Path to the metadata file.
     :param nucleotide_threshold:
         Max length of sequences to process.
+    :param max_sequence_length:
+        Max sequence length to pad to.
     :param batch_size:
         Number of samples per batch.
     :param shuffle:
@@ -171,10 +180,14 @@ def create_data_loader(
     :return:
         DataLoader instance.
     """
-    dataset = BAMReadDataset(file_paths, metadata_path, nucleotide_threshold)
+    dataset = BAMReadDataset(
+        file_paths, metadata_path, nucleotide_threshold, max_sequence_length,
+        min_quality=min_quality
+    )
     sampler = InfiniteSampler(dataset, shuffle)
     return DataLoader(
-        dataset, batch_size=batch_size, collate_fn=collate_fn, sampler=sampler
+        dataset, batch_size=batch_size, collate_fn=collate_fn, sampler=sampler,
+        num_workers=num_workers, prefetch_factor=prefetch_factor
     )
 
 
@@ -234,3 +247,4 @@ def collate_fn(batch):
             )
 
     return batched_data
+

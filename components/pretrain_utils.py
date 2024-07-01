@@ -2,6 +2,85 @@ import torch
 import torch.nn.functional as F
 
 
+class WarmupConstantScheduler(torch.optim.lr_scheduler._LRScheduler):
+    def __init__(self, optimizer, warmup, base_lr, last_epoch=-1):
+        self.warmup = warmup
+        self.base_lr = base_lr
+        super(WarmupConstantScheduler, self).__init__(optimizer, last_epoch)
+
+    def get_lr(self):
+        if self.last_epoch < self.warmup:
+            return [
+                (self.base_lr * self.last_epoch / self.warmup) for base_lr
+                in self.base_lrs
+            ]
+        else:
+            return [self.base_lr for base_lr in self.base_lrs]
+
+
+# Functions to check that weights are not being updated when they shouldn't be.
+def get_weights(model):
+    return {name: param.clone() for name, param in model.named_parameters()}
+
+
+def check_weights(initial_weights, model):
+    for name, param in model.named_parameters():
+        if not torch.equal(initial_weights[name], param):
+            print(f"Warning: Weight {name} has been updated!")
+        else:
+            print(f"Weight {name} has not been updated.")
+
+
+def create_intervals(max_sequence_length, min_length=256):
+    """
+    Create a list of intervals from a nucleotide threshold.
+
+    :param max_sequence_length:
+        The nucleotide threshold.
+    :param min_length:
+        The minimum length of the interval.
+    :returns:
+        A list of intervals.
+    """
+    num_intervals = 0
+    interval_size = min_length
+    while interval_size < max_sequence_length:
+        interval_size *= 2
+        num_intervals += 1
+
+    intervals = [(2 ** (i)) * min_length for i in range(0, num_intervals)]
+    # set last interval to the remainder of the nucleotide threshold
+    intervals[-1] = max_sequence_length
+    return intervals
+
+
+def create_corruption_rates(intervals, min_rate=0.15, read_length=250, scale=0.9):
+    """
+    Create a list of corruption rates for each interval.
+
+    :param intervals:
+        A list of intervals.
+    :param min_rate:
+        The minimum corruption rate.
+    :param read_length:
+        The length of the reads.
+    :param scale:
+        The scaling factor for the corruption rates. This is used to control
+        the overall corruption rate. To be tuned as not sure how aggressively
+        the redundancy from the overlapping reads needs to counteract the
+        corruption.
+    :returns:
+        A list of corruption rates.
+    """
+    rates = []
+    # We want to ensure that there is at least one reads worth of data untouched
+    # in each sample, based upon the interval (now many nucleotides in total) and
+    # the read length.
+    for interval in intervals:
+        rates.append(max(min_rate, 1 - read_length / interval) * scale)
+    return rates
+
+
 def replacement_loss(predictions, replacement_mask, mixing_mask, valid_mask):
     """
     Compute the replacement loss with mixed labels.
@@ -163,4 +242,3 @@ def get_replacement_mask(positions, rate=0.15):
     replace_mask = replace_mask & valid_mask
 
     return replace_mask
-

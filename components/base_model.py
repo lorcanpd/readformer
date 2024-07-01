@@ -5,6 +5,36 @@ from components.hyena import HyenaBlock, FeedForward
 from components.self_attention import MultiHeadSelfAttention
 
 
+def init_weights(m):
+    """
+    Initialise the weights of any model.
+
+    :param m:
+    :return:
+    """
+    if isinstance(m, nn.Linear):
+        nn.init.kaiming_uniform_(m.weight)
+        if m.bias is not None:
+            nn.init.zeros_(m.bias)
+    elif isinstance(m, nn.LayerNorm):
+        nn.init.ones_(m.weight)
+        nn.init.zeros_(m.bias)
+    elif isinstance(m, nn.Embedding):
+        nn.init.kaiming_normal_(m.weight)
+    elif isinstance(m, nn.Parameter):
+        if m.dim() > 1:
+            nn.init.kaiming_uniform_(m)
+        else:
+            nn.init.zeros_(m)
+
+    # if hasattr(m, 'name') and m.name == "scaling_vector":
+    #     nn.init.ones_(m)
+    # elif isinstance(m, nn.Module):
+    #     for name, param in m.named_parameters():
+    #         if "scaling_vector" in name:
+    #             nn.init.ones_(param)
+
+
 class TransformerBlock(nn.Module):
     """
     Transformer block that can switch between self-attention and Hyena block.
