@@ -1,11 +1,10 @@
 import torch
+import argparse
 import components.data_streaming
 import components.base_model
 import components.read_embedding
 import components.classification_head
 import components.pretrain_utils
-import components.data_streaming
-
 
 """
 Script for profiling the memory requirements of the model and data loader. The 
@@ -117,18 +116,22 @@ def calculate_memory(
 
 
 def main():
-    # Training parameters.
-    batch_size = 256
-    emb_dim = 512
-    max_sequence_length = 16384
+    parser = argparse.ArgumentParser(description="Profile memory requirements for model and data loader.")
+    parser.add_argument('--batch_size', type=int, default=256, help='Batch size for training')
+    parser.add_argument('--emb_dim', type=int, default=512, help='Embedding dimension')
+    parser.add_argument('--max_sequence_length', type=int, default=8192, help='Maximum sequence length')
+    parser.add_argument('--num_layers', type=int, default=12, help='Number of layers in the model')
+    parser.add_argument('--hyena', action='store_true', help='Use hyena model configuration')
+    parser.add_argument('--heads', type=int, default=16, help='Number of attention heads')
+    parser.add_argument('--kernel_size', type=int, default=13, help='Kernel size for convolutional layers')
+    parser.add_argument('--data_dir', type=str, default='GIAB_BAM/illumina_2x250bps', help='Directory for input data')
+    parser.add_argument('--metadata_path', type=str, default='GIAB_BAM/pretraining_metadata.csv', help='Path to metadata file')
+    parser.add_argument('--num_workers', type=int, default=4, help='Number of worker processes for data loading')
+    parser.add_argument('--prefetch_factor', type=int, default=3, help='Prefetch factor for data loading')
+    parser.add_argument('--min_quality', type=int, default=25, help='Minimum quality for data filtering')
+    parser.add_argument('--shuffle', action='store_true', help='Shuffle data during loading')
 
-    num_layers = 12
-    hyena = False
-    if hyena:
-        heads = 2
-    else:
-        heads = 16
-    kernel_size = 13
+    args = parser.parse_args()
 
     # Select device
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -136,32 +139,32 @@ def main():
 
     # Model components
     nucleotide_embeddings = components.read_embedding.NucleotideEmbeddingLayer(
-        emb_dim
+        args.emb_dim
     ).apply(
         components.base_model.init_weights
     )
     float_metric_embeddings = components.read_embedding.MetricEmbedding(
-        emb_dim // 2, name='float',
+        args.emb_dim // 2, name='float',
         num_metrics=2
     ).apply(
         components.base_model.init_weights
     )
     binary_metric_embeddings = components.read_embedding.MetricEmbedding(
-        emb_dim // 2, name='binary',
+        args.emb_dim // 2, name='binary',
         num_metrics=14
     ).apply(
         components.base_model.init_weights
     )
 
     readformer = components.base_model.Model(
-        emb_dim=emb_dim, heads=heads, num_layers=num_layers, hyena=hyena,
-        kernel_size=kernel_size
+        emb_dim=args.emb_dim, heads=args.heads, num_layers=args.num_layers, hyena=args.hyena,
+        kernel_size=args.kernel_size
     ).apply(
         components.base_model.init_weights
     )
     classifier = components.classification_head.TransformerBinaryClassifier(
-        embedding_dim=emb_dim,
-        hidden_dim=emb_dim // 2,
+        embedding_dim=args.emb_dim,
+        hidden_dim=args.emb_dim // 2,
         dropout_rate=0.1
     ).apply(
         components.base_model.init_weights
@@ -180,8 +183,8 @@ def main():
         nucleotide_embeddings, float_metric_embeddings,
         binary_metric_embeddings,
         readformer, classifier,
-        batch_size, max_sequence_length,
-        emb_dim,
+        args.batch_size, args.max_sequence_length,
+        args.emb_dim,
         main_optimizer,
         device
     )
@@ -194,27 +197,14 @@ def main():
         [nucleotide_embeddings, float_metric_embeddings, binary_metric_embeddings, readformer, classifier]
     )
     size_in_bytes = num_params * 4  # 4 bytes for each float32 parameter
-    # size_in_mb = size_in_bytes / (1024 ** 2)
     size_in_gb = size_in_bytes / (1024 ** 3)
     print(f"Total number of parameters: {num_params}")
     print(f"Saved model will take up: {size_in_gb:.2f} Gb")
 
-    # Data loading parameters
-    data_dir = '/lustre/scratch126/casm/team274sb/lp23/readformer/data/pretrain_symlinks'
-    metadata_path = '/lustre/scratch126/casm/team274sb/lp23/readformer/data/pretrain_metadata.csv'
-    # data_dir = 'GIAB_BAM/illumina_2x250bps'
-    # metadata_path = 'GIAB_BAM/pretraining_metadata.csv'
-
-    nucleotide_threshold = 16384  # 16384 = depth of 64x coverage
-    min_quality = 25
-    shuffle = True
-    num_workers = 4
-    prefetch_factor = 3
-
     # Create data loader
     data_loader = components.data_streaming.create_data_loader(
-        data_dir, metadata_path, nucleotide_threshold, max_sequence_length,
-        batch_size, min_quality, shuffle, num_workers, prefetch_factor
+        args.data_dir, args.metadata_path, args.max_sequence_length, args.max_sequence_length,
+        args.batch_size, args.min_quality, args.shuffle, args.num_workers, args.prefetch_factor
     )
 
     # Calculate data loader memory
