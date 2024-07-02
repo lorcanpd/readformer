@@ -27,7 +27,7 @@ singularity exec --nv \
   --pwd /scripts/readformer \
   /nfs/users/nfs_l/lp23/sifs/readformer.sif \
   python3 /scripts/readformer/memory_requirements.py \
-    --batch_size 64 \
+    --batch_size 32 \
     --emb_dim 512 \
     --max_sequence_length 8192 \
     --num_layers 6 \
