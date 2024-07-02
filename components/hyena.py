@@ -75,7 +75,7 @@ class CustomMaskedConv1D(nn.Module):
         # bases on different reads.
         expected_positions = (
                 position_patches[:, :, kernel_center].unsqueeze(2) +
-                torch.arange(-kernel_center, kernel_center + 1)
+                torch.arange(-kernel_center, kernel_center + 1).to(device)
         )
         mask = (position_patches == expected_positions).float().unsqueeze(-2)
         # Apply the mask
