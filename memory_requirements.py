@@ -100,7 +100,8 @@ def calculate_memory(
         binary_metric_emb = binary_metric_embeddings(binary_metrics)
         metrics_emb = torch.cat([float_metric_emb, binary_metric_emb], dim=-1)
         model_input = nucleotide_emb + metrics_emb
-        output = readformer(model_input, dummy_positions)
+        model_input = model_input.to(device)
+        output = readformer(model_input, dummy_positions.to(device))
         output = classifier(output)
 
         # Simulate backward pass
@@ -116,20 +117,34 @@ def calculate_memory(
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Profile memory requirements for model and data loader.")
-    parser.add_argument('--batch_size', type=int, default=256, help='Batch size for training')
-    parser.add_argument('--emb_dim', type=int, default=512, help='Embedding dimension')
-    parser.add_argument('--max_sequence_length', type=int, default=8192, help='Maximum sequence length')
-    parser.add_argument('--num_layers', type=int, default=12, help='Number of layers in the model')
-    parser.add_argument('--hyena', action='store_true', help='Use hyena model configuration')
-    parser.add_argument('--heads', type=int, default=16, help='Number of attention heads')
-    parser.add_argument('--kernel_size', type=int, default=13, help='Kernel size for convolutional layers')
-    parser.add_argument('--data_dir', type=str, default='GIAB_BAM/illumina_2x250bps', help='Directory for input data')
-    parser.add_argument('--metadata_path', type=str, default='GIAB_BAM/pretraining_metadata.csv', help='Path to metadata file')
-    parser.add_argument('--num_workers', type=int, default=4, help='Number of worker processes for data loading')
-    parser.add_argument('--prefetch_factor', type=int, default=3, help='Prefetch factor for data loading')
-    parser.add_argument('--min_quality', type=int, default=25, help='Minimum quality for data filtering')
-    parser.add_argument('--shuffle', action='store_true', help='Shuffle data during loading')
+    parser = argparse.ArgumentParser(
+        description="Profile memory requirements for model and data loader.")
+    parser.add_argument(
+        '--batch_size', type=int, default=256, help='Batch size for training')
+    parser.add_argument(
+        '--emb_dim', type=int, default=512, help='Embedding dimension')
+    parser.add_argument(
+        '--max_sequence_length', type=int, default=8192, help='Maximum sequence length')
+    parser.add_argument(
+        '--num_layers', type=int, default=12, help='Number of layers in the model')
+    parser.add_argument(
+        '--hyena', action='store_true', help='Use hyena model configuration')
+    parser.add_argument(
+        '--heads', type=int, default=16, help='Number of attention heads')
+    parser.add_argument(
+        '--kernel_size', type=int, default=13, help='Kernel size for convolutional layers')
+    parser.add_argument(
+        '--data_dir', type=str, default='GIAB_BAM/illumina_2x250bps', help='Directory for input data')
+    parser.add_argument(
+        '--metadata_path', type=str, default='GIAB_BAM/pretraining_metadata.csv', help='Path to metadata file')
+    parser.add_argument(
+        '--num_workers', type=int, default=4, help='Number of worker processes for data loading')
+    parser.add_argument(
+        '--prefetch_factor', type=int, default=3, help='Prefetch factor for data loading')
+    parser.add_argument(
+        '--min_quality', type=int, default=25, help='Minimum quality for data filtering')
+    parser.add_argument(
+        '--shuffle', action='store_true', help='Shuffle data during loading')
 
     args = parser.parse_args()
 
@@ -194,7 +209,10 @@ def main():
     # Space taken up by a saved model
     num_params = sum(
         count_parameters(x) for x in
-        [nucleotide_embeddings, float_metric_embeddings, binary_metric_embeddings, readformer, classifier]
+        [
+            nucleotide_embeddings, float_metric_embeddings,
+            binary_metric_embeddings, readformer, classifier
+        ]
     )
     size_in_bytes = num_params * 4  # 4 bytes for each float32 parameter
     size_in_gb = size_in_bytes / (1024 ** 3)
@@ -203,8 +221,9 @@ def main():
 
     # Create data loader
     data_loader = components.data_streaming.create_data_loader(
-        args.data_dir, args.metadata_path, args.max_sequence_length, args.max_sequence_length,
-        args.batch_size, args.min_quality, args.shuffle, args.num_workers, args.prefetch_factor
+        args.data_dir, args.metadata_path, args.max_sequence_length,
+        args.max_sequence_length, args.batch_size, args.min_quality,
+        args.shuffle, args.num_workers, args.prefetch_factor
     )
 
     # Calculate data loader memory
