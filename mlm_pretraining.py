@@ -14,7 +14,8 @@ from components.pretrain_utils import (
     get_replacement_mask,
     # adversarial_loss,
     create_intervals, create_corruption_rates,
-    WarmupConstantScheduler
+    WarmupConstantScheduler,
+    mlm_accuracy
     # get_weights, check_weights
 )
 
@@ -77,14 +78,22 @@ def get_args():
                         ))
     parser.add_argument('--kernel_size', type=int, default=15,
                         help='Kernel size for the Hyena block.')
-    parser.add_argument('--corruption_scale', type=float, default=0.9,
-                        help='Scale for corruption rates.')
+    parser.add_argument(
+        '--corruption_scale', type=float, default=0.9,
+        help='Scale for corruption rates.'
+    )
     parser.add_argument('--name', type=str, default='readformer',
                         help='Name with which to save the model.')
     parser.add_argument('--model_dir', type=str, default='models',
                         help='Directory to save the model.')
-    parser.add_argument('--load_latest_checkpoint', type=bool, default=False,
-                        help='Whether to load the latest checkpoint.')
+    parser.add_argument(
+        '--load_latest_checkpoint', type=bool, default=False,
+        help='Whether to load the latest checkpoint.'
+    )
+    parser.add_argument(
+        '--wandb_api_path', type=str, default='.wandb_api',
+        help='Path to the wandb api key file.'
+    )
 
     args = parser.parse_args()
     return args
@@ -137,6 +146,7 @@ if __name__ == '__main__':
     hyena = args.hyena
     kernel_size = args.kernel_size
     checkpoint_path = f"{args.model_dir}/{args.name}_latest.pth"
+    wand_api_path = args.wandb_api_path
 
     # Print values to verify
     print(f"metadata_path: {metadata_path}")
@@ -161,8 +171,8 @@ if __name__ == '__main__':
     print(f"name: {args.name}")
 
     if args.wandb:
-        # load api key from ../.wandb_api
-        with open('../.wandb_api') as f:
+        # load api key from file
+        with open(wand_api_path) as f:
             api_key = f.read().strip()
         os.environ["WANDB_API_KEY"] = api_key
         wandb.login(key=api_key)
@@ -376,6 +386,8 @@ if __name__ == '__main__':
         output = readformer(model_input, positions)
         output = classifier(output)
 
+        batch_accuracy = mlm_accuracy(output, nucleotide_sequences)
+
         # Main model loss and optimisation
         loss = loss_fn(
             output[valid_mask],
@@ -386,12 +398,13 @@ if __name__ == '__main__':
         loss.backward()
         torch.nn.utils.clip_grad_norm_(readformer.parameters(), max_norm=1)
         optimiser.step()
-        print(f"Loss at iteration {i}: {loss.item()}")
+        # print(f"Loss at iteration {i}: {loss.item()}")
 
         if args.wandb:
             wandb.log(
                 {
                     "loss": loss.item(), "iteration": i,
+                    "batch_accuracy": batch_accuracy,
                     "lr": scheduler.get_last_lr(),
                     "interval": intervals[j],
                     "corruption_rate": corruption_rates[j]

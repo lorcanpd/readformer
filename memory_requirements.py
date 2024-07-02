@@ -121,10 +121,14 @@ def main():
     batch_size = 512
     emb_dim = 512
     max_sequence_length = 16384
-    heads = 16
+
     num_layers = 12
     hyena = False
-    kernel_size = 15
+    if hyena:
+        heads = 2
+    else:
+        heads = 16
+    kernel_size = 13
 
     # Select device
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -196,10 +200,10 @@ def main():
     print(f"Saved model will take up: {size_in_gb:.2f} Gb")
 
     # Data loading parameters
-    # data_dir = '/lustre/scratch126/casm/team274sb/lp23/readformer/data/pretrain_symlinks'
-    # metadata_path = '/lustre/scratch126/casm/team274sb/lp23/readformer/data/pretrain_metadata.csv'
-    data_dir = 'GIAB_BAM/illumina_2x250bps'
-    metadata_path = 'GIAB_BAM/pretraining_metadata.csv'
+    data_dir = '/lustre/scratch126/casm/team274sb/lp23/readformer/data/pretrain_symlinks'
+    metadata_path = '/lustre/scratch126/casm/team274sb/lp23/readformer/data/pretrain_metadata.csv'
+    # data_dir = 'GIAB_BAM/illumina_2x250bps'
+    # metadata_path = 'GIAB_BAM/pretraining_metadata.csv'
 
     nucleotide_threshold = 16384  # 16384 = depth of 64x coverage
     min_quality = 25

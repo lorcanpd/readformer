@@ -242,3 +242,17 @@ def get_replacement_mask(positions, rate=0.15):
     replace_mask = replace_mask & valid_mask
 
     return replace_mask
+
+
+def mlm_accuracy(logits, target):
+    with torch.no_grad():
+        # Flatten logits and target for loss computation
+        logits_flat = logits.view(-1, logits.size(-1))
+        target_flat = target.view(-1).long()
+        pred_probs = F.softmax(logits_flat, dim=-1)
+        pred_classes = torch.argmax(pred_probs, dim=-1)
+        correct_predictions = (pred_classes == target_flat).float()
+        accuracy = correct_predictions.mean().item()
+        # print(f"Batch Accuracy: {accuracy * 100:.2f}%")
+        # print(f"Loss: {loss.item()}")
+        return accuracy
