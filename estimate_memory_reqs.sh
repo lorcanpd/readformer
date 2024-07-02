@@ -27,11 +27,12 @@ singularity exec --nv \
   --pwd /scripts/readformer \
   /nfs/users/nfs_l/lp23/sifs/readformer.sif \
   python3 /scripts/readformer/memory_requirements.py \
-    --batch_size 256 \
+    --batch_size 128 \
     --emb_dim 512 \
     --max_sequence_length 8192 \
     --num_layers 6 \
-    --heads 16 \
+    --hyena \
+    --heads 2 \
     --data_dir /data/pretrain_symlinks \
     --metadata_path /data/pretrain_metadata.csv \
     --num_workers 4 \
