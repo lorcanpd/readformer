@@ -3,10 +3,10 @@
 #BSUB -q gpu-normal
 #BSUB -o logs/memory_requirements_%J.out
 #BSUB -e logs/memory_requirements_%J.err
-#BSUB -M 40960
+#BSUB -M 8192
 #BSUB -n 4
-#BSUB -gpu "mode=shared:num=1:gmem=40960"
-#BSUB -R "select[mem>40960] rusage[mem=40960] span[hosts=1]"
+#BSUB -gpu "mode=shared:num=1:gmem=81920"
+#BSUB -R "select[mem>8192] rusage[mem=8192] span[hosts=1]"
 #BSUB -W 00:15
 
 
@@ -27,11 +27,12 @@ singularity exec --nv \
   --pwd /scripts/readformer \
   /nfs/users/nfs_l/lp23/sifs/readformer.sif \
   python3 /scripts/readformer/memory_requirements.py \
-    --batch_size 32 \
-    --emb_dim 512 \
+    --batch_size 8 \
+    --emb_dim 128 \
     --max_sequence_length 8192 \
-    --num_layers 6 \
+    --num_layers 5 \
     --hyena \
+    --kernel_size 3 \
     --heads 2 \
     --data_dir /data/pretrain_symlinks \
     --metadata_path /data/pretrain_metadata.csv \

@@ -6,6 +6,8 @@ import components.read_embedding
 import components.classification_head
 import components.pretrain_utils
 
+from torch.cuda.amp import autocast, GradScaler
+
 """
 Script for profiling the memory requirements of the model and data loader. The 
 intention is to provide an estimate of the memory requirements for training the
@@ -45,7 +47,7 @@ def calculate_memory(
         nucleotide_embeddings, float_metric_embeddings, binary_metric_embeddings,
         readformer, classifier,
         batch_size, sequence_length, emb_dim,
-        main_optimizer,
+        main_optimizer, scaler,
         device
 ):
     # Move models to device
@@ -88,24 +90,25 @@ def calculate_memory(
             0, sequence_length, (batch_size, sequence_length)
         ).to(device)
 
-        nucleotide_emb = nucleotide_embeddings(dummy_input)
-        float_metrics = torch.zeros(
-            (batch_size, sequence_length, 2), device=device
-        )
-        binary_metrics = torch.zeros(
-            (batch_size, sequence_length, 14), device=device
-        )
+        with autocast():
+            nucleotide_emb = nucleotide_embeddings(dummy_input)
+            float_metrics = torch.zeros(
+                (batch_size, sequence_length, 2), device=device
+            )
+            binary_metrics = torch.zeros(
+                (batch_size, sequence_length, 14), device=device
+            )
 
-        float_metric_emb = float_metric_embeddings(float_metrics)
-        binary_metric_emb = binary_metric_embeddings(binary_metrics)
-        metrics_emb = torch.cat([float_metric_emb, binary_metric_emb], dim=-1)
-        model_input = nucleotide_emb + metrics_emb
-        model_input = model_input.to(device)
-        output = readformer(model_input, dummy_positions.to(device))
-        output = classifier(output)
+            float_metric_emb = float_metric_embeddings(float_metrics)
+            binary_metric_emb = binary_metric_embeddings(binary_metrics)
+            metrics_emb = torch.cat([float_metric_emb, binary_metric_emb], dim=-1)
+            model_input = nucleotide_emb + metrics_emb
+            model_input = model_input.to(device)
+            output = readformer(model_input, dummy_positions.to(device))
+            output = classifier(output)
 
         # Simulate backward pass
-        output.sum().backward()
+        scaler.scale(output.sum()).backward()
 
         # Get peak memory usage
         gpu_memory_usage = torch.cuda.max_memory_allocated(
@@ -126,7 +129,7 @@ def main():
     parser.add_argument(
         '--max_sequence_length', type=int, default=8192, help='Maximum sequence length')
     parser.add_argument(
-        '--num_layers', type=int, default=12, help='Number of layers in the model')
+        '--num_layers', type=int, default12, help='Number of layers in the model')
     parser.add_argument(
         '--hyena', action='store_true', help='Use hyena model configuration')
     parser.add_argument(
@@ -194,13 +197,16 @@ def main():
     )
     main_optimizer = torch.optim.Adam(main_params, lr=1e-3)
 
+    # Set up the gradient scaler for AMP
+    scaler = GradScaler()
+
     total_memory = calculate_memory(
         nucleotide_embeddings, float_metric_embeddings,
         binary_metric_embeddings,
         readformer, classifier,
         args.batch_size, args.max_sequence_length,
         args.emb_dim,
-        main_optimizer,
+        main_optimizer, scaler,
         device
     )
 
