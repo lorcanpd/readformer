@@ -61,16 +61,16 @@ class CustomMaskedConv1D(nn.Module):
         batch_size, seq_length, _ = inputs.size()
         kernel_center = self.kernel_size // 2
         # Pad inputs and positions to handle the borders
-        pad_size = kernel_center
+        pad_size = kernel_center.to(device)
         padded_inputs = F.pad(inputs, (0, 0, pad_size, pad_size))
         padded_positions = F.pad(positions, (pad_size, pad_size), value=-1)
         # Extract and reshape patches
         input_patches = padded_inputs.unfold(
             1, self.kernel_size, self.stride
-        ).contiguous()
+        ).contiguous().to(device)
         position_patches = padded_positions.unfold(
             1, self.kernel_size, self.stride
-        )
+        ).to(device)
         # Create a mask to prevent short convolution aggregating signals from
         # bases on different reads.
         expected_positions = (
