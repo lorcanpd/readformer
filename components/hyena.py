@@ -55,6 +55,9 @@ class CustomMaskedConv1D(nn.Module):
         :return:
             Output tensor after masked convolution.
         """
+        device = inputs.device
+        self.kernel = self.kernel.to(device)
+
         batch_size, seq_length, _ = inputs.size()
         kernel_center = self.kernel_size // 2
         # Pad inputs and positions to handle the borders
@@ -130,7 +133,8 @@ class HyenaProjection(nn.Module):
             List of n_order projected tensors, each of shape (batch_size,
             emb_dim, seq_length).
         """
-
+        device = inputs.device
+        self.W = self.W.to(device)
         x = inputs
         x = torch.matmul(x, self.W)
         z = self.custom_conv(x, positions)
@@ -209,6 +213,13 @@ class FeedForward(nn.Module):
         :return:
             Output tensor after applying the feed-forward layer.
         """
+        device = inputs.device
+        self.W1 = self.W1.to(device)
+        self.b1 = self.b1.to(device)
+        self.W2 = self.W2.to(device)
+        self.b2 = self.b2.to(device)
+        self.ff_scale = self.ff_scale.to(device)
+
         x = torch.matmul(inputs, self.W1) + self.b1
         x = self.layer_norm(x)
         x = self.activation(x)
@@ -245,6 +256,9 @@ class HyenaFilter(nn.Module):
         :return:
             List of filters, each of shape (batch_size, emb_dim, seq_length).
         """
+        device = embeddings.device
+        self.theta_vector = self.theta_vector.to(device)
+
         rotation_matrices = compute_rotation_angles(
             positions, self.emb_dim, self.theta_vector
         )
@@ -349,6 +363,11 @@ class HyenaBlock(nn.Module):
         :return:
             Output tensor of shape (batch_size, seq_length, emb_dim).
         """
+
+        device = embeddings.device
+        self.B = self.B.to(device)
+        self.output_projection = self.output_projection.to(device)
+
         *x, v = self.projection(embeddings, positions)
         filters = self.filter(embeddings, positions)
 
