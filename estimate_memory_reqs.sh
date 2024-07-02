@@ -9,6 +9,7 @@
 #BSUB -R "select[mem>40960] rusage[mem=40960] span[hosts=1]"
 #BSUB -W 00:15
 
+
 # Removed from the above:
 # -gpu "mode=shared:num=1:gmem=81920::gmodel=NVIDIAA100_SXM4_80GB"
 READFORMER_DIR="/lustre/scratch126/casm/team274sb/lp23/readformer/readformer"
@@ -25,7 +26,7 @@ singularity exec --nv \
   --bind ${META_DATA_PATH}:/data/pretrain_metadata.csv \
   --pwd /scripts/readformer \
   /nfs/users/nfs_l/lp23/sifs/readformer.sif \
-  python3 /scripts/readformer/memory_requirements.py python script_name.py \
+  python3 /scripts/readformer/memory_requirements.py \
     --batch_size 256 \
     --emb_dim 512 \
     --max_sequence_length 8192 \
