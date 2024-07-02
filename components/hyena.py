@@ -61,7 +61,7 @@ class CustomMaskedConv1D(nn.Module):
         batch_size, seq_length, _ = inputs.size()
         kernel_center = self.kernel_size // 2
         # Pad inputs and positions to handle the borders
-        pad_size = kernel_center.to(device)
+        pad_size = kernel_center
         padded_inputs = F.pad(inputs, (0, 0, pad_size, pad_size))
         padded_positions = F.pad(positions, (pad_size, pad_size), value=-1)
         # Extract and reshape patches
