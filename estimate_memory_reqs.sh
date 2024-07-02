@@ -19,6 +19,6 @@ singularity exec --nv \
   --bind ${READFORMER_DIR}:/scripts/readformer \
   --pwd /scripts/readformer \
   /nfs/users/nfs_l/lp23/sifs/readformer.sif \
-  bash -c "export PYTHONPATH=/scripts/readformer:\$PYTHONPATH && python3 /scripts/readformer/memory_requirements.py"
+  python3 /scripts/readformer/memory_requirements.py
 
 echo "Finished"
