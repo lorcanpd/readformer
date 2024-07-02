@@ -129,7 +129,7 @@ def main():
     parser.add_argument(
         '--max_sequence_length', type=int, default=8192, help='Maximum sequence length')
     parser.add_argument(
-        '--num_layers', type=int, default12, help='Number of layers in the model')
+        '--num_layers', type=int, default=12, help='Number of layers in the model')
     parser.add_argument(
         '--hyena', action='store_true', help='Use hyena model configuration')
     parser.add_argument(
