@@ -118,7 +118,7 @@ def calculate_memory(
 
 def main():
     # Training parameters.
-    batch_size = 512
+    batch_size = 256
     emb_dim = 512
     max_sequence_length = 16384
 
