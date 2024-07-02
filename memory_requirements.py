@@ -99,8 +99,8 @@ def calculate_memory(
 
         float_metric_emb = float_metric_embeddings(float_metrics)
         binary_metric_emb = binary_metric_embeddings(binary_metrics)
-
-        model_input = nucleotide_emb + float_metric_emb + binary_metric_emb
+        metrics_emb = torch.cat([float_metric_emb, binary_metric_emb], dim=-1)
+        model_input = nucleotide_emb + metrics_emb
         output = readformer(model_input, dummy_positions)
         output = classifier(output)
 
