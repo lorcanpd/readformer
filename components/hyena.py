@@ -119,8 +119,15 @@ class IndependentDepthwiseSeparableConv1D(nn.Module):
         batch_size, seq_length, emb_size = inputs.shape
 
         # Compute differences to identify gaps
-        position_differences = torch.diff(positions, dim=1, prepend=torch.tensor([[float('nan')]] * batch_size))
-        boundaries = (position_differences != 1) & torch.isfinite(position_differences)
+        position_differences = torch.diff(
+            positions, dim=1,
+            prepend=torch.full(
+                (batch_size, 1), float('nan'), device=inputs.device
+            )
+        )
+        boundaries = (position_differences != 1) & torch.isfinite(
+            position_differences
+        )
 
         # Create new tensor with padding inserted at the boundaries
         padded_inputs = []
@@ -142,7 +149,7 @@ class IndependentDepthwiseSeparableConv1D(nn.Module):
             padded_inputs.append(torch.cat(segments, dim=0))
 
         # Concatenate all batch segments and apply depthwise convolution
-        padded_inputs = torch.stack(padded_inputs)
+        padded_inputs = torch.stack(padded_inputs).to(inputs.device)
         conv_output = self.depthwise(
             padded_inputs.transpose(1, 2)
         ).transpose(1, 2)
@@ -231,22 +238,22 @@ class HyenaProjection(nn.Module):
 
 
 # test the hyena projection
-emb_dim = 2
-n_order = 2
-kernel_size = 3
-seq_length = 10
-batch_size = 2
-
-inputs = torch.randn(batch_size, seq_length, emb_dim)
-
-positions = torch.tensor([
-    [0, 1, 2, 3, 1, 2, 3, 4, 5, 6],
-    [1, 2, 3, 1, 2, 3, 4, 5, 6, 7]
-])
-
-test = HyenaProjection(emb_dim, n_order, kernel_size)
-
-output = test(inputs, positions)
+# emb_dim = 2
+# n_order = 2
+# kernel_size = 3
+# seq_length = 10
+# batch_size = 2
+#
+# inputs = torch.randn(batch_size, seq_length, emb_dim)
+#
+# positions = torch.tensor([
+#     [0, 1, 2, 3, 1, 2, 3, 4, 5, 6],
+#     [1, 2, 3, 1, 2, 3, 4, 5, 6, 7]
+# ])
+#
+# test = HyenaProjection(emb_dim, n_order, kernel_size)
+#
+# output = test(inputs, positions)
 
 
 class FeedForward(nn.Module):
