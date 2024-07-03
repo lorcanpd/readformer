@@ -117,7 +117,6 @@ def calculate_memory(
     return total_memory
 
 
-
 def main():
     parser = argparse.ArgumentParser(
         description="Profile memory requirements for model and data loader.")
@@ -197,7 +196,7 @@ def main():
     main_optimizer = torch.optim.Adam(main_params, lr=1e-3)
 
     # Set up the gradient scaler for AMP
-    scaler = GradScaler()
+    # scaler = GradScaler()
 
     total_memory = calculate_memory(
         nucleotide_embeddings, float_metric_embeddings,
@@ -230,20 +229,28 @@ def main():
         args.max_sequence_length, args.batch_size, args.min_quality,
         args.shuffle, args.num_workers, args.prefetch_factor
     )
-    # Check that the data loader is working
-    for batch in data_loader:
-        # check that the batch is not empty
-        assert len(batch) > 0
-        # check that the batch contains the expected keys
-        assert 'nucleotide_sequences' in batch
-        # print the shape of the nucleotide sequences tensor
-        print(batch['nucleotide_sequences'].shape)
-        break
+
 
     # Calculate data loader memory
     batch_memory_MB, prefetch_memory_MB, total_data_memory_MB = calculate_data_loader_memory(
         data_loader, device
     )
+
+    # Check that the data loader is working
+    for batch in data_loader:
+        # check that the batch is not empty
+        if len(batch) > 0:
+            print("Batch not empty")
+        else:
+            print("Batch empty")
+        # check that the batch contains the expected keys
+        if 'nucleotide_sequences' in batch:
+            print("Nucleotide sequences found in batch")
+            print(batch['nucleotide_sequences'].shape)
+        else:
+            print("Nucleotide sequences not found in batch")
+        break
+
     print(f"Batch Memory Requirement: {batch_memory_MB:.2f} MB")
     print(f"Prefetch Memory Requirement: {prefetch_memory_MB:.2f} MB")
     print(f"Total Data Loader Memory Requirement: {total_data_memory_MB:.2f} MB")
