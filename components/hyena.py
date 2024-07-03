@@ -5,6 +5,8 @@ import torch.nn.functional as F
 from components.rotary_encoding import (
     compute_theta_vector, compute_rotation_angles, apply_dimensionwise_rotation
 )
+from torch.nn.utils.rnn import pad_sequence
+
 
 #
 # class CustomMaskedConv1D(nn.Module):
@@ -147,9 +149,13 @@ class IndependentDepthwiseSeparableConv1D(nn.Module):
             # Add the last segment
             segments.append(inputs[i, last_index:])
             padded_inputs.append(torch.cat(segments, dim=0))
-
+        # Pad the sequences to the same length as come may contain more segments
+        # than others.
+        padded_inputs = pad_sequence(
+            padded_inputs, batch_first=True
+        ).to(inputs.device)
         # Concatenate all batch segments and apply depthwise convolution
-        padded_inputs = torch.stack(padded_inputs).to(inputs.device)
+        # padded_inputs = torch.stack(padded_inputs).to(inputs.device)
         conv_output = self.depthwise(
             padded_inputs.transpose(1, 2)
         ).transpose(1, 2)
@@ -168,16 +174,14 @@ class IndependentDepthwiseSeparableConv1D(nn.Module):
 # n_order = 2
 # kernel_size = 3
 # seq_length = 10
-# batch_size = 4
+# batch_size = 2
 #
 # in_channels = emb_dim * (n_order + 1)
 #
 # inputs = torch.randn(batch_size, seq_length, in_channels)
 #
 # positions = torch.tensor([
-#     [0, 1, 2, 3, 1, 2, 3, 4, 5, 6],
-#     [1, 2, 3, 1, 2, 3, 4, 5, 6, 7],
-#     [0, 1, 2, 3, 1, 2, 3, 4, 5, 6],
+#     [0, 1, 2, 3, 1, 2, 3, 1, 2, 3],
 #     [1, 2, 3, 1, 2, 3, 4, 5, 6, 7]
 # ])
 #
