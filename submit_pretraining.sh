@@ -50,12 +50,14 @@ for scale in "${SCALES[@]}"; do
 
 module load cellgen/singularity
 
-singularity exec --nv ${SIF} \
+singularity exec --nv \
   --bind ${READFORMER_DIR}:/scripts/readformer \
   --bind ${DATA_DIR}:/data/pretrain_symlinks \
   --bind ${METADATA_PATH}:/data/pretrain_metadata.csv \
   --bind ${MODEL_DIR}:/models \
   --bind ${WANDB_API_KEY_PATH}:/home/wandb_api_key \
+  --pwd /scripts/readformer \
+  ${SIF} \
   python3 /scripts/readformer/mlm_pretraining.py \
     --metadata_path /data/pretrain_metadata.csv \
     --data_dir /data/pretrain_symlinks \
@@ -80,6 +82,11 @@ singularity exec --nv ${SIF} \
 
 EOF
   )
+
+  if [[ $? -ne 0 ]]; then
+    echo "Error submitting job with corruption rate scaling ${scale}"
+    exit 1
+  fi
 
   echo "Submitted job ${job_id} with corruption rate scaling ${scale}"
 done
