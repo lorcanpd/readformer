@@ -45,8 +45,8 @@ for scale in "${SCALES[@]}"; do
 #BSUB -M ${MEMORY}
 #BSUB -n ${CORES}
 #BSUB -gpu "mode=shared:num=1:gmem=40960"
-#BSUB -R "select[mem>8192] rusage[mem=8192] span[hosts=1]"
-#BSUB -W 6:00
+#BSUB -R "select[mem>${MEMORY}] rusage[mem=${MEMORY}] span[hosts=1]"
+#BSUB -W 00:45
 
 module load cellgen/singularity
 
