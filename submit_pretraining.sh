@@ -27,7 +27,6 @@ ITERS_IN_EPOCH=1000
 CORRUPTION_RATE="variable"
 PROPORTION_RANDOM=0.1
 MAIN_LR=1e-3
-WANDB=true
 
 SCALES=( 0.5 0.75 0.9 )
 
@@ -44,7 +43,7 @@ for scale in "${SCALES[@]}"; do
 #BSUB -e ${LOG_DIR}/${NAME}_%J.err
 #BSUB -M ${MEMORY}
 #BSUB -n ${CORES}
-#BSUB -gpu "mode=shared:num=1:gmem=40960"
+#BSUB -gpu "mode=shared:num=1:gmem=${GPU_MEMORY}"
 #BSUB -R "select[mem>${MEMORY}] rusage[mem=${MEMORY}] span[hosts=1]"
 #BSUB -W 00:45
 

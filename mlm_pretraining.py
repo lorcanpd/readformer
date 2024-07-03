@@ -225,8 +225,9 @@ if __name__ == '__main__':
 
     # Set the scaling vectors to one and freeze them.
     for layer in readformer.layers:
-        layer.self_attention.init_scaling_vectors()
-        layer.self_attention.freeze_scaling_vectors()
+        if not args.hyena:
+            layer.self_attention.init_scaling_vectors()
+            layer.self_attention.freeze_scaling_vectors()
         layer.feed_forward.init_scaling_vector()
         layer.feed_forward.freeze_scaling_vector()
 
