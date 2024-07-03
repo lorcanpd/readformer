@@ -209,10 +209,14 @@ if __name__ == '__main__':
         emb_dim, mlm_mode=True
     ).apply(init_weights)
     float_metric_embeddings = MetricEmbedding(
-        emb_dim // 2, name='float', num_metrics=2
+        # emb_dim // 2,
+        emb_dim,
+        name='float', num_metrics=2
     ).apply(init_weights)
     binary_metric_embeddings = MetricEmbedding(
-        emb_dim // 2, name='binary', num_metrics=14
+        # emb_dim // 2,
+        emb_dim,
+        name='binary', num_metrics=14
     ).apply(init_weights)
 
     readformer = Model(
@@ -322,13 +326,15 @@ if __name__ == '__main__':
             ],
             dim=-1
         ).float().detach()
-        metric_emb = torch.cat(
-            [
-                float_metric_embeddings(float_metrics),
-                binary_metric_embeddings(binary_vec)
-            ],
-            dim=-1
-        )
+        # metric_emb = torch.cat(
+        #     [
+        #         float_metric_embeddings(float_metrics),
+        #         binary_metric_embeddings(binary_vec)
+        #     ],
+        #     dim=-1
+        # )
+        metric_emb = float_metric_embeddings(
+            float_metrics) + binary_metric_embeddings(binary_vec)
         # Get as many masked embeddings as there are replacement positions
         masked_sequence = nucleotide_sequences.clone()
         # apply the mask token to the masked positions

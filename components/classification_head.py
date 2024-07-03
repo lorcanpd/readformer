@@ -233,7 +233,6 @@ class MLMClassifier(nn.Module):
     def __init__(self, emb_dim, num_classes):
         super(MLMClassifier, self).__init__()
         self.linear = nn.Linear(emb_dim, num_classes)
-        self.softmax = nn.Softmax(dim=-1)
 
     def forward(self, x):
         """

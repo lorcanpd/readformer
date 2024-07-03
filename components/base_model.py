@@ -59,7 +59,7 @@ class TransformerBlock(nn.Module):
         nn.init.ones_(self.layer_norm2.weight)
         nn.init.zeros_(self.layer_norm2.bias)
         self.feed_forward = FeedForward(
-            emb_dim, hidden_dim=emb_dim * 2, activation="mish"
+            emb_dim, hidden_dim=emb_dim, activation="mish"
         )
         self.hyena = hyena
         if hyena:
