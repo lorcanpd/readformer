@@ -121,15 +121,12 @@ class IndependentDepthwiseSeparableConv1D(nn.Module):
         batch_size, seq_length, emb_size = inputs.shape
 
         # Compute differences to identify gaps
-        position_differences = torch.diff(
-            positions, dim=1,
-            prepend=torch.full(
-                (batch_size, 1), float('nan'), device=inputs.device
-            )
-        )
-        boundaries = (position_differences != 1) & torch.isfinite(
-            position_differences
-        )
+        position_differences = torch.diff(positions, dim=1, append=torch.full((batch_size, 1), -1, device=inputs.device))
+        # Identify boundaries where the absolute differences between adjacent
+        # positions are not equal to 1 and are finite.
+        boundaries = (position_differences != 1) & torch.isfinite(position_differences)
+        not_boundaries = (position_differences == 0) # Padded positions
+        final_boundaries = boundaries & ~not_boundaries
 
         # Create new tensor with padding inserted at the boundaries
         padded_inputs = []
@@ -137,7 +134,7 @@ class IndependentDepthwiseSeparableConv1D(nn.Module):
             # Split input into segments without crossing boundaries
             segments = []
             last_index = 0
-            for idx in torch.where(boundaries[i])[0] + 1:
+            for idx in torch.where(final_boundaries[i])[0] + 1:
                 segments.append(inputs[i, last_index:idx])
                 # Add padding segments
                 segments.append(
@@ -163,31 +160,17 @@ class IndependentDepthwiseSeparableConv1D(nn.Module):
         # removing the indices of vectors that sum to zero in the padded
         # inputs from the conv_output. Then reshape the output to the original
         # shape.
+
         conv_output = conv_output[torch.sum(padded_inputs, dim=-1) != 0].view(
-            batch_size, seq_length, self.out_channels
+            batch_size, -1, self.out_channels
+        )
+        # pad to the original sequence length
+        conv_output = F.pad(
+            conv_output, (0, 0, 0, seq_length - conv_output.size(-2))
         )
 
         return conv_output
 
-
-# emb_dim = 2
-# n_order = 2
-# kernel_size = 3
-# seq_length = 10
-# batch_size = 2
-#
-# in_channels = emb_dim * (n_order + 1)
-#
-# inputs = torch.randn(batch_size, seq_length, in_channels)
-#
-# positions = torch.tensor([
-#     [0, 1, 2, 3, 1, 2, 3, 1, 2, 3],
-#     [1, 2, 3, 1, 2, 3, 4, 5, 6, 7]
-# ])
-#
-# test = IndependentDepthwiseSeparableConv1D(kernel_size, in_channels, in_channels, in_channels)
-#
-# output = test(inputs, positions)
 
 class HyenaProjection(nn.Module):
     """
@@ -486,7 +469,7 @@ class HyenaBlock(nn.Module):
 
         for i, x_i in enumerate(x):
             h_i = filters[i]
-            v = x_i.mul_(v.mul_(self.B[i]).add_(self.fft_long_conv(v, h_i)))
+            v = x_i * (v * self.B[i] + self.fft_long_conv(v, h_i))
 
         # Transpose v to shape (batch_size, seq_len, emb_dim)
         v = v.transpose(2, 1)

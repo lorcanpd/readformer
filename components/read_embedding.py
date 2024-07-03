@@ -95,9 +95,9 @@ class NucleotideEmbeddingLayer(nn.Module):
 
         self.embedding_dim = embedding_dim
         self.mlm_mode = mlm_mode
-        num_nucleotides = 16 if mlm_mode else 15
+        num_nucleotides = 16
         self.mask_index = num_nucleotides if mlm_mode else None
-        self.padding_idx = 15 if mlm_mode else 14  # The padding index is always 15
+        self.padding_idx = 15
         self.embedding = nn.Embedding(
             num_embeddings=num_nucleotides + (1 if mlm_mode else 0),
             embedding_dim=embedding_dim,
@@ -113,6 +113,7 @@ class NucleotideEmbeddingLayer(nn.Module):
         :return:
             The corresponding nucleotide embeddings.
         """
+        # breakpoint()
         embeddings = self.embedding(inputs)
         # Mask the padding indices with zero vectors
         mask = (inputs != self.padding_idx).unsqueeze(-1).float()
