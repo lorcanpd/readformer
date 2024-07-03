@@ -4,14 +4,16 @@ BASENAME="hyena_128dim_2group_2layer"
 
 LOG_DIR="logs/pretrain"
 
+mkdir -p ${LOG_DIR}
+
 READFORMER_DIR="/lustre/scratch126/casm/team274sb/lp23/readformer/readformer"
 WANDB_API_KEY_PATH="/lustre/scratch126/casm/team274sb/lp23/.wandb_api"
 SIF="/nfs/users/nfs_l/lp23/sifs/readformer.sif"
 DATA_DIR="/lustre/scratch126/casm/team274sb/lp23/readformer/data/pretrain_symlinks"
 METADATA_PATH="/lustre/scratch126/casm/team274sb/lp23/readformer/data/pretrain_metadata.csv"
 MODEL_DIR="/lustre/scratch126/casm/team274sb/lp23/readformer/models"
-GPU_MEMORY=16384
-MEMORY=51200
+GPU_MEMORY=40960
+MEMORY=16384
 CORES=4
 NUM_HEADS=2
 NUM_LAYERS=2
@@ -42,8 +44,9 @@ for scale in "${SCALES[@]}"; do
 #BSUB -e ${LOG_DIR}/${NAME}_%J.err
 #BSUB -M ${MEMORY}
 #BSUB -n ${CORES}
-#BSUB -gpu "num=1:gmem=${GPU_MEMORY}"
-#BSUB -R "select[mem>${MEMORY}] rusage[mem=${MEMORY}, ngpus_physical=1, gmem=${GPU_MEMORY}] span[hosts=1]"
+#BSUB -gpu "mode=shared:num=1:gmem=40960"
+#BSUB -R "select[mem>8192] rusage[mem=8192] span[hosts=1]"
+#BSUB -W 6:00
 
 module load cellgen/singularity
 
