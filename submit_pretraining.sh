@@ -1,6 +1,6 @@
 #!/bin/bash
 
-BASENAME="TESTING_scale"
+BASENAME="hyena_128dim_2group_2layer"
 
 LOG_DIR="logs/pretrain"
 
@@ -10,15 +10,15 @@ SIF="/nfs/users/nfs_l/lp23/sifs/readformer.sif"
 DATA_DIR="/lustre/scratch126/casm/team274sb/lp23/readformer/data/pretrain_symlinks"
 METADATA_PATH="/lustre/scratch126/casm/team274sb/lp23/readformer/data/pretrain_metadata.csv"
 MODEL_DIR="/lustre/scratch126/casm/team274sb/lp23/readformer/models"
-GPU_MEMORY=40960
+GPU_MEMORY=16384
 MEMORY=51200
 CORES=4
-NUM_HEADS=16
-NUM_LAYERS=12
-MIN_READ_QUALITY=30
-BATCH_SIZE=512
-EMB_DIM=512
-MAX_SEQUENCE_LENGTH=1024
+NUM_HEADS=2
+NUM_LAYERS=2
+MIN_READ_QUALITY=20
+BATCH_SIZE=64
+EMB_DIM=128
+MAX_SEQUENCE_LENGTH=8192
 WARM_UP_EPOCHS=10
 EPOCHS_AT_INTERVAL=2
 ITERS_IN_EPOCH=1000
@@ -26,13 +26,12 @@ CORRUPTION_RATE="variable"
 PROPORTION_RANDOM=0.1
 MAIN_LR=1e-3
 WANDB=true
-HYENA=false
 
 SCALES=( 0.5 0.75 0.9 )
 
 for scale in "${SCALES[@]}"; do
   # Set the arguments
-  NAME="${BASENAME}_${scale}"
+  NAME="${BASENAME}_corrupt_${scale}"
   CORRUPTION_SCALE=${scale}
 
   job_id=$(bsub << EOF | grep -oE "[0-9]+"
@@ -72,7 +71,7 @@ singularity exec --nv ${SIF} \
     --proportion_random ${PROPORTION_RANDOM} \
     --main_lr ${MAIN_LR} \
     --wandb ${WANDB} \
-    --hyena ${HYENA} \
+    --hyena \
     --corruption_scale ${CORRUPTION_SCALE} \
     --name ${NAME}
 
