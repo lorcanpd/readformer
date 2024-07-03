@@ -64,18 +64,17 @@ def get_args():
                         default="variable",
                         help='Corruption rate.')
     parser.add_argument(
-        '--proportion_random', type=float, default=0.33,
+        '--proportion_random', type=float, default=0.1,
         help='Proportion of corrupted labels to be assigned random nucleotides.'
     )
     parser.add_argument('--main_lr', type=float, default=1e-3,
                         help='Learning rate for the main optimizer.')
-    parser.add_argument('--wandb', type=bool, default=True,
+    parser.add_argument('--wandb', action='store_true',
                         help='Whether to use wandb for logging.')
-    parser.add_argument('--hyena', type=bool, default=False,
-                        help=(
-                            'Whether to use the Hyena block. '
-                            'False means self-attention.'
-                        ))
+    parser.add_argument(
+        '--hyena', action='store_true',
+        help='Use hyena model configuration'
+    )
     parser.add_argument('--kernel_size', type=int, default=15,
                         help='Kernel size for the Hyena block.')
     parser.add_argument(

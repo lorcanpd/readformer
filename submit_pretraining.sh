@@ -75,7 +75,7 @@ singularity exec --nv \
     --corruption_rate ${CORRUPTION_RATE} \
     --proportion_random ${PROPORTION_RANDOM} \
     --main_lr ${MAIN_LR} \
-    --wandb ${WANDB} \
+    --wandb \
     --hyena \
     --corruption_scale ${CORRUPTION_SCALE} \
     --name ${NAME}
