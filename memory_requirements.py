@@ -47,8 +47,7 @@ def calculate_memory(
         nucleotide_embeddings, float_metric_embeddings, binary_metric_embeddings,
         readformer, classifier,
         batch_size, sequence_length, emb_dim,
-        main_optimizer, scaler,
-        device
+        main_optimizer, device
 ):
     # Move models to device
     nucleotide_embeddings.to(device)
@@ -90,25 +89,24 @@ def calculate_memory(
             0, sequence_length, (batch_size, sequence_length)
         ).to(device)
 
-        with autocast():
-            nucleotide_emb = nucleotide_embeddings(dummy_input)
-            float_metrics = torch.zeros(
-                (batch_size, sequence_length, 2), device=device
-            )
-            binary_metrics = torch.zeros(
-                (batch_size, sequence_length, 14), device=device
-            )
+        nucleotide_emb = nucleotide_embeddings(dummy_input)
+        float_metrics = torch.zeros(
+            (batch_size, sequence_length, 2), device=device
+        )
+        binary_metrics = torch.zeros(
+            (batch_size, sequence_length, 14), device=device
+        )
 
-            float_metric_emb = float_metric_embeddings(float_metrics)
-            binary_metric_emb = binary_metric_embeddings(binary_metrics)
-            metrics_emb = torch.cat([float_metric_emb, binary_metric_emb], dim=-1)
-            model_input = nucleotide_emb + metrics_emb
-            model_input = model_input.to(device)
-            output = readformer(model_input, dummy_positions.to(device))
-            output = classifier(output)
+        float_metric_emb = float_metric_embeddings(float_metrics)
+        binary_metric_emb = binary_metric_embeddings(binary_metrics)
+        metrics_emb = torch.cat([float_metric_emb, binary_metric_emb], dim=-1)
+        model_input = nucleotide_emb + metrics_emb
+        model_input = model_input.to(device)
+        output = readformer(model_input, dummy_positions.to(device))
+        output = classifier(output)
 
-        # Simulate backward pass
-        scaler.scale(output.sum()).backward()
+        # Simulate backward pass without scaling
+        output.sum().backward()
 
         # Get peak memory usage
         gpu_memory_usage = torch.cuda.max_memory_allocated(
@@ -117,6 +115,7 @@ def calculate_memory(
         total_memory += gpu_memory_usage
 
     return total_memory
+
 
 
 def main():
