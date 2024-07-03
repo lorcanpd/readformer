@@ -230,6 +230,15 @@ def main():
         args.max_sequence_length, args.batch_size, args.min_quality,
         args.shuffle, args.num_workers, args.prefetch_factor
     )
+    # Check that the data loader is working
+    for batch in data_loader:
+        # check that the batch is not empty
+        assert len(batch) > 0
+        # check that the batch contains the expected keys
+        assert 'nucleotide_sequences' in batch
+        # print the shape of the nucleotide sequences tensor
+        print(batch['nucleotide_sequences'].shape)
+        break
 
     # Calculate data loader memory
     batch_memory_MB, prefetch_memory_MB, total_data_memory_MB = calculate_data_loader_memory(
