@@ -6,97 +6,177 @@ from components.rotary_encoding import (
     compute_theta_vector, compute_rotation_angles, apply_dimensionwise_rotation
 )
 
+#
+# class CustomMaskedConv1D(nn.Module):
+#     """
+#     Custom masked 1D convolution layer that prevents aggregating signals from
+#     bases on different reads.
+#
+#     :param kernel_size:
+#         Size of the convolution kernel.
+#     :param in_channels:
+#         Number of input channels.
+#     :param out_channels:
+#         Number of output channels.
+#     :param groups:
+#         Number of groups for the grouped convolution.
+#     :param stride:
+#         Stride of the convolution. Default is 1.
+#     """
+#     def __init__(
+#             self, kernel_size, in_channels, out_channels, groups, stride=1
+#     ):
+#         super(CustomMaskedConv1D, self).__init__()
+#         self.groups = groups
+#         self.stride = stride
+#         # self.padding = padding
+#         self.kernel_size = kernel_size
+#         self.in_channels_per_group = in_channels // groups
+#         self.out_channels_per_group = out_channels // groups
+#         self.kernel = nn.Parameter(
+#             nn.init.kaiming_uniform_(
+#                 torch.randn(
+#                     1, 1, groups,
+#                     self.out_channels_per_group,
+#                     self.in_channels_per_group,
+#                     kernel_size
+#                 )
+#             )
+#         )
+#
+#     def forward(self, inputs, positions):
+#         """
+#         Perform the forward pass of the position-aware masked convolution.
+#
+#         :param inputs:
+#             Input tensor of shape (batch_size, seq_length, in_channels).
+#         :param positions:
+#             Position tensor of shape (batch_size, seq_length).
+#         :return:
+#             Output tensor after masked convolution.
+#         """
+#         self.kernel = self.kernel.to(inputs.device)
+#
+#         batch_size, seq_length, _ = inputs.size()
+#         kernel_center = self.kernel_size // 2
+#
+#         # Efficient padding integrated with unfold
+#         input_patches = F.pad(
+#             inputs, (0, 0, kernel_center, kernel_center), mode='reflect'
+#         ).unfold(1, self.kernel_size, self.stride).contiguous()
+#         position_patches = F.pad(
+#             positions, (kernel_center, kernel_center), value=-1
+#         ).unfold(1, self.kernel_size, self.stride)
+#
+#         # Calculate the expected positions and create the mask
+#         expected_positions = position_patches[:, :, kernel_center].unsqueeze(
+#             2) + torch.arange(
+#             -kernel_center, kernel_center + 1, device=inputs.device
+#         )
+#         mask = (position_patches == expected_positions).float().unsqueeze(-2)
+#
+#         # Apply the mask using in-place operations
+#         input_patches.mul_(mask)
+#
+#         # Use view to reshape input patches to reduce copying data
+#         grouped_input_patches = input_patches.view(
+#             batch_size, seq_length, self.groups, self.in_channels_per_group,
+#             self.kernel_size
+#         )
+#
+#         # Elementwise multiplication using broadcasting
+#         conv_result = grouped_input_patches.unsqueeze(-3) * self.kernel
+#
+#         # Sum over the last two dimensions
+#         output = conv_result.sum(dim=(-1, -2))
+#
+#         return output
 
-class CustomMaskedConv1D(nn.Module):
-    """
-    Custom masked 1D convolution layer that prevents aggregating signals from
-    bases on different reads.
 
-    :param kernel_size:
-        Size of the convolution kernel.
-    :param in_channels:
-        Number of input channels.
-    :param out_channels:
-        Number of output channels.
-    :param groups:
-        Number of groups for the grouped convolution.
-    :param stride:
-        Stride of the convolution. Default is 1.
-    """
-    def __init__(
-            self, kernel_size, in_channels, out_channels, groups, stride=1
-    ):
-        super(CustomMaskedConv1D, self).__init__()
-        self.groups = groups
+class IndependentDepthwiseSeparableConv1D(nn.Module):
+    def __init__(self, kernel_size, in_channels, out_channels, groups, stride=1):
+        super(IndependentDepthwiseSeparableConv1D, self).__init__()
         self.stride = stride
-        # self.padding = padding
         self.kernel_size = kernel_size
-        self.in_channels_per_group = in_channels // groups
-        self.out_channels_per_group = out_channels // groups
-        self.kernel = nn.Parameter(
-            nn.init.kaiming_uniform_(
-                torch.randn(
-                    1, 1, groups,
-                    self.out_channels_per_group,
-                    self.in_channels_per_group,
-                    kernel_size
-                )
-            )
+        self.in_channels = in_channels
+        self.out_channels = out_channels
+        self.groups = groups
+
+        # Depthwise convolution
+        self.depthwise = nn.Conv1d(
+            in_channels, out_channels, kernel_size,
+            stride=stride, groups=groups, padding=kernel_size//2
         )
 
     def forward(self, inputs, positions):
         """
-        Perform the forward pass of the position-aware masked convolution.
+        Apply convolutions with splitting and independent processing.
 
-        :param inputs:
-            Input tensor of shape (batch_size, seq_length, in_channels).
-        :param positions:
-            Position tensor of shape (batch_size, seq_length).
-        :return:
-            Output tensor after masked convolution.
+        :param inputs: Input tensor of shape (batch_size, seq_length, in_channels).
+        :param positions: Position tensor indicating where to split the sequence.
+        :return: Output tensor after processing.
         """
-        device = inputs.device
-        self.kernel = self.kernel.to(device)
+        batch_size, seq_length, emb_size = inputs.shape
 
-        batch_size, seq_length, _ = inputs.size()
-        kernel_center = self.kernel_size // 2
-        # Pad inputs and positions to handle the borders
-        pad_size = kernel_center
-        padded_inputs = F.pad(inputs, (0, 0, pad_size, pad_size))
-        padded_positions = F.pad(positions, (pad_size, pad_size), value=-1)
-        # Extract and reshape patches
-        input_patches = padded_inputs.unfold(
-            1, self.kernel_size, self.stride
-        ).contiguous().to(device)
-        position_patches = padded_positions.unfold(
-            1, self.kernel_size, self.stride
-        ).to(device)
-        # Create a mask to prevent short convolution aggregating signals from
-        # bases on different reads.
-        expected_positions = (
-                position_patches[:, :, kernel_center].unsqueeze(2) +
-                torch.arange(-kernel_center, kernel_center + 1).to(device)
+        # Compute differences to identify gaps
+        position_differences = torch.diff(positions, dim=1, prepend=torch.tensor([[float('nan')]] * batch_size))
+        boundaries = (position_differences != 1) & torch.isfinite(position_differences)
+
+        # Create new tensor with padding inserted at the boundaries
+        padded_inputs = []
+        for i in range(batch_size):
+            # Split input into segments without crossing boundaries
+            segments = []
+            last_index = 0
+            for idx in torch.where(boundaries[i])[0] + 1:
+                segments.append(inputs[i, last_index:idx])
+                # Add padding segments
+                segments.append(
+                    torch.zeros(
+                        (self.kernel_size - 1, emb_size), device=inputs.device
+                    )
+                )
+                last_index = idx
+            # Add the last segment
+            segments.append(inputs[i, last_index:])
+            padded_inputs.append(torch.cat(segments, dim=0))
+
+        # Concatenate all batch segments and apply depthwise convolution
+        padded_inputs = torch.stack(padded_inputs)
+        conv_output = self.depthwise(
+            padded_inputs.transpose(1, 2)
+        ).transpose(1, 2)
+        # Remove the indices that were added as padding. This is done by
+        # removing the indices of vectors that sum to zero in the padded
+        # inputs from the conv_output. Then reshape the output to the original
+        # shape.
+        conv_output = conv_output[torch.sum(padded_inputs, dim=-1) != 0].view(
+            batch_size, seq_length, self.out_channels
         )
-        mask = (position_patches == expected_positions).float().unsqueeze(-2)
-        # Apply the mask
-        masked_input_patches = input_patches * mask
-        # Reshape the masked input patches to group the channels
-        grouped_patches = masked_input_patches.reshape(
-            batch_size, seq_length, self.groups, self.in_channels_per_group,
-            self.kernel_size
-        )
-        # Perform an elementwise multiplication with each of the
-        # num_out_channels kernels
-        # output shape = (batch_size, seq_length, groups,
-        # out_channels_per_group, in_channels_per_group, kernel_size)
-        conv_result = (grouped_patches.unsqueeze(-3) * self.kernel)
-        # Sum over the kernel size dimension and the in_channels_per_group
-        # dimension
-        # output shape = (batch_size, seq_length, groups, out_channels_per_group)
-        output = conv_result.sum(dim=(-1, -2))
 
-        return output
+        return conv_output
 
+
+# emb_dim = 2
+# n_order = 2
+# kernel_size = 3
+# seq_length = 10
+# batch_size = 4
+#
+# in_channels = emb_dim * (n_order + 1)
+#
+# inputs = torch.randn(batch_size, seq_length, in_channels)
+#
+# positions = torch.tensor([
+#     [0, 1, 2, 3, 1, 2, 3, 4, 5, 6],
+#     [1, 2, 3, 1, 2, 3, 4, 5, 6, 7],
+#     [0, 1, 2, 3, 1, 2, 3, 4, 5, 6],
+#     [1, 2, 3, 1, 2, 3, 4, 5, 6, 7]
+# ])
+#
+# test = IndependentDepthwiseSeparableConv1D(kernel_size, in_channels, in_channels, in_channels)
+#
+# output = test(inputs, positions)
 
 class HyenaProjection(nn.Module):
     """
@@ -116,9 +196,13 @@ class HyenaProjection(nn.Module):
         self.W = nn.Parameter(
             nn.init.kaiming_uniform_(torch.randn(emb_dim, self.groups * emb_dim))
         )
-        self.custom_conv = CustomMaskedConv1D(
+        # self.custom_conv = CustomMaskedConv1D(
+        #     kernel_size, self.groups * emb_dim, self.groups * emb_dim,
+        #     self.groups
+        # )
+        self.custom_conv = IndependentDepthwiseSeparableConv1D(
             kernel_size, self.groups * emb_dim, self.groups * emb_dim,
-            self.groups
+            self.groups * emb_dim
         )
 
     def forward(self, inputs, positions):
@@ -144,6 +228,25 @@ class HyenaProjection(nn.Module):
         z = z.unbind(dim=-2)
 
         return z
+
+
+# test the hyena projection
+emb_dim = 2
+n_order = 2
+kernel_size = 3
+seq_length = 10
+batch_size = 2
+
+inputs = torch.randn(batch_size, seq_length, emb_dim)
+
+positions = torch.tensor([
+    [0, 1, 2, 3, 1, 2, 3, 4, 5, 6],
+    [1, 2, 3, 1, 2, 3, 4, 5, 6, 7]
+])
+
+test = HyenaProjection(emb_dim, n_order, kernel_size)
+
+output = test(inputs, positions)
 
 
 class FeedForward(nn.Module):
@@ -301,25 +404,24 @@ class FFTLongConv(nn.Module):
         L = inputs.size(-1)
         padded_length = 2 * L  # Double the length for FFT
         # Pad the inputs and filters
-        inputs_padded = F.pad(inputs, (0, padded_length - L))
-        filters_padded = F.pad(filters, (0, padded_length - L))
+        inputs = F.pad(inputs, (0, padded_length - L))
+        filters = F.pad(filters, (0, padded_length - L))
         # Perform FFT
-        inputs_fft = torch.fft.rfft(
-            inputs_padded, n=padded_length, dim=-1, norm='forward'
+        inputs = torch.fft.rfft(
+            inputs, n=padded_length, dim=-1, norm='forward'
         )
-        filters_fft = torch.fft.rfft(
-            filters_padded, n=padded_length, dim=-1, norm='forward'
+        filters = torch.fft.rfft(
+            filters, n=padded_length, dim=-1, norm='forward'
         )
         # Element-wise multiplication in the frequency domain
-        product_fft = inputs_fft * filters_fft
+        inputs.mul_(filters)
         # Inverse FFT to get the convolution result
         result = torch.fft.irfft(
-            product_fft, n=padded_length, dim=-1, norm='forward'
+            inputs, n=padded_length, dim=-1, norm='forward'
         )
         # Remove padding
-        result_real = result[..., :L]
+        return result[..., :L]
 
-        return result_real
 
 
 class HyenaBlock(nn.Module):
@@ -373,7 +475,7 @@ class HyenaBlock(nn.Module):
 
         for i, x_i in enumerate(x):
             h_i = filters[i]
-            v = x_i * (v * self.B[i] + self.fft_long_conv(v, h_i))
+            v = x_i.mul_(v.mul_(self.B[i]).add_(self.fft_long_conv(v, h_i)))
 
         # Transpose v to shape (batch_size, seq_len, emb_dim)
         v = v.transpose(2, 1)
