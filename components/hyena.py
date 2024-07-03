@@ -121,11 +121,14 @@ class IndependentDepthwiseSeparableConv1D(nn.Module):
         batch_size, seq_length, emb_size = inputs.shape
 
         # Compute differences to identify gaps
-        position_differences = torch.diff(positions, dim=1, append=torch.full((batch_size, 1), -1, device=inputs.device))
+        position_differences = torch.diff(
+            positions, dim=1,
+            append=torch.full((batch_size, 1), -1, device=inputs.device)
+        )
         # Identify boundaries where the absolute differences between adjacent
         # positions are not equal to 1 and are finite.
-        boundaries = (position_differences != 1) & torch.isfinite(position_differences)
-        not_boundaries = (position_differences == 0) # Padded positions
+        boundaries = (position_differences != 1)
+        not_boundaries = (position_differences == 0)  # Padded positions
         final_boundaries = boundaries & ~not_boundaries
 
         # Create new tensor with padding inserted at the boundaries
@@ -137,19 +140,19 @@ class IndependentDepthwiseSeparableConv1D(nn.Module):
             for idx in torch.where(final_boundaries[i])[0] + 1:
                 segments.append(inputs[i, last_index:idx])
                 # Add padding segments
-                segments.append(
-                    torch.zeros(
-                        (self.kernel_size - 1, emb_size), device=inputs.device
+                if idx < seq_length:
+                    segments.append(
+                        torch.zeros((self.kernel_size // 2, emb_size),
+                                    device=inputs.device)
                     )
-                )
                 last_index = idx
             # Add the last segment
             segments.append(inputs[i, last_index:])
-            padded_inputs.append(torch.cat(segments, dim=0))
+            padded_inputs.append(torch.cat(segments, dim=-2))
         # Pad the sequences to the same length as come may contain more segments
         # than others.
         padded_inputs = pad_sequence(
-            padded_inputs, batch_first=True
+            padded_inputs, batch_first=True, padding_value=0
         ).to(inputs.device)
         # Concatenate all batch segments and apply depthwise convolution
         # padded_inputs = torch.stack(padded_inputs).to(inputs.device)
