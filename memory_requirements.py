@@ -205,7 +205,7 @@ def main():
         readformer, classifier,
         args.batch_size, args.max_sequence_length,
         args.emb_dim,
-        main_optimizer, scaler,
+        main_optimizer,
         device
     )
 
