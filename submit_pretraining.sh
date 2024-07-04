@@ -28,7 +28,9 @@ CORRUPTION_RATE="variable"
 PROPORTION_RANDOM=0.1
 MAIN_LR=1e-3
 
-SCALES=( 0.5 0.75 0.9 )
+#SCALES=( 0.5 0.75 0.9 )
+
+SCALES=( 0.5 )
 
 for scale in "${SCALES[@]}"; do
   # Set the arguments
@@ -74,7 +76,6 @@ singularity exec --nv \
     --corruption_rate ${CORRUPTION_RATE} \
     --proportion_random ${PROPORTION_RANDOM} \
     --main_lr ${MAIN_LR} \
-    --wandb \
     --hyena \
     --corruption_scale ${CORRUPTION_SCALE} \
     --name ${NAME}

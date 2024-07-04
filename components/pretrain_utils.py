@@ -192,7 +192,9 @@ def broadcast_unique_randoms_to_input(
         A tensor of random values broadcast to the input sequence.
     """
     batch_size, seq_length = positions.size()
-    broadcasted_randoms = torch.zeros_like(positions, dtype=torch.float)
+    broadcasted_randoms = torch.zeros_like(
+        positions, dtype=torch.float, device=positions.device
+    )
 
     for i in range(batch_size):
         seq = positions[i]
