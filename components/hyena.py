@@ -212,7 +212,7 @@ class HyenaProjection(nn.Module):
         # )
         self.custom_conv = IndependentDepthwiseSeparableConv1D(
             kernel_size, self.groups * emb_dim, self.groups * emb_dim,
-            self.groups * emb_dim
+            self.groups
         )
 
     def forward(self, inputs, positions):
