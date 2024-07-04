@@ -161,7 +161,7 @@ def generate_random_for_unique_positions(positions):
     for i in range(batch_size):
         seq = positions[i]
         unique_vals, inverse_indices = torch.unique(
-            seq[seq != -1], return_inverse=True
+            seq[seq != -1], return_inverse=True, device=positions.device
         )
         lognorms = torch.distributions.LogNormal(
             0, 1
