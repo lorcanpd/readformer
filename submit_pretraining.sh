@@ -9,8 +9,8 @@ mkdir -p ${LOG_DIR}
 READFORMER_DIR="/lustre/scratch126/casm/team274sb/lp23/readformer/readformer"
 WANDB_API_KEY_PATH="/lustre/scratch126/casm/team274sb/lp23/.wandb_api"
 SIF="/nfs/users/nfs_l/lp23/sifs/readformer.sif"
-DATA_DIR="/lustre/scratch126/casm/team274sb/lp23/readformer/data/pretrain_symlinks"
-METADATA_PATH="/lustre/scratch126/casm/team274sb/lp23/readformer/data/pretrain_metadata.csv"
+DATA_DIR="/lustre/scratch126/casm/team274sb/lp23/readformer/data/pretrain_bams"
+METADATA_PATH="/lustre/scratch126/casm/team274sb/lp23/readformer/data/one_sample_metadata.csv"
 MODEL_DIR="/lustre/scratch126/casm/team274sb/lp23/readformer/models"
 GPU_MEMORY=40960
 MEMORY=16384
@@ -51,7 +51,7 @@ module load cellgen/singularity
 
 singularity exec --nv \
   --bind ${READFORMER_DIR}:/scripts/readformer \
-  --bind ${DATA_DIR}:/data/pretrain_symlinks \
+  --bind ${DATA_DIR}:/data/pretrain/BAM \
   --bind ${METADATA_PATH}:/data/pretrain_metadata.csv \
   --bind ${MODEL_DIR}:/models \
   --bind ${WANDB_API_KEY_PATH}:/home/wandb_api_key \

@@ -19,7 +19,7 @@ RUN python3 -m venv $VENV_PATH && \
     pip install pysam==0.22.0 matplotlib==3.8.4 wandb==0.17.2 seaborn==0.13.2 pandas==2.2.1 ipython
 
 # Create directories for the user to mount data and code
-RUN mkdir -p /nfs /nst_dir /data/pretrain_symlinks /data/finetune/BAM /data/finetune/VCF /scripts/readformer \
+RUN mkdir -p /nfs /nst_dir /data/pretrain/BAM /data/finetune/BAM /data/finetune/VCF /scripts/readformer \
     /models /home
 
 # Provide an entry point that does nothing, allowing the user to define commands at runtime
