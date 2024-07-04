@@ -87,10 +87,15 @@ class BAMReadDataset(Dataset):
 
         while retries < max_retries:
             positions = sample_positions(1, sex)
-            read_dict = extract_reads_from_position_onward(
-                file_path, 'chr' + positions[0][0], positions[0][1],
-                self.nucleotide_threshold, self.min_quality
-            )
+            try:
+                read_dict = extract_reads_from_position_onward(
+                    file_path, 'chr' + positions[0][0], positions[0][1],
+                    self.nucleotide_threshold, self.min_quality
+                )
+            except Exception as e:
+                print(f"Error extracting reads: {e}")
+                retries += 1
+                continue
             if read_dict:
                 read_info = get_read_info(read_dict)
                 break

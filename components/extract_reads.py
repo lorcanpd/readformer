@@ -6,7 +6,6 @@ import random
 from typing import Dict, List, Optional, Tuple
 
 
-
 def estimate_initial_window(
         bam_file, chromosome, position, nucleotide_threshold, initial_window=100
 ) -> int:
@@ -63,9 +62,30 @@ def extract_reads_from_position_onward(
     fetched_reads = {}
     total_nucleotides = 0
 
-    for read in bam_file.fetch(
-            chromosome, position, position + nucleotide_threshold
-    ):
+    # Adjust chromosome name if necessary
+    adjusted_chromosome = chromosome
+    if chromosome not in bam_file.references:
+        if chromosome.startswith("chr"):
+            adjusted_chromosome = chromosome[3:]  # Try without 'chr'
+        else:
+            adjusted_chromosome = "chr" + chromosome  # Try with 'chr'
+        if adjusted_chromosome not in bam_file.references:
+            bam_file.close()
+            raise ValueError(
+                f"Chromosome {adjusted_chromosome} not found in the BAM file."
+            )
+
+    try:
+        iter_reads = bam_file.fetch(
+            adjusted_chromosome, position, position + nucleotide_threshold
+        )
+    except ValueError as e:
+        bam_file.close()
+        raise ValueError(
+            f"Error fetching reads from {adjusted_chromosome}:{position} - {e}"
+        )
+
+    for read in iter_reads:
         if read.mapping_quality < min_quality:
             continue
         if total_nucleotides + read.query_length > nucleotide_threshold:
