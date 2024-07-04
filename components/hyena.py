@@ -164,15 +164,28 @@ class IndependentDepthwiseSeparableConv1D(nn.Module):
         # inputs from the conv_output. Then reshape the output to the original
         # shape.
 
-        conv_output = conv_output[torch.sum(padded_inputs, dim=-1) != 0].view(
-            batch_size, -1, self.out_channels
-        )
+        try:
+            # conv_output = conv_output[torch.sum(padded_inputs, dim=-1) != 0].view(
+            #     batch_size, -1, self.out_channels
+            # )
+            # identify vectors of zeros in the padded inputs
+            # zero_vectors = torch.all(padded_inputs != 0, dim=-1)
+            conv_output = conv_output[
+                torch.all(padded_inputs != 0, dim=-1)
+            ].view(
+                batch_size, -1, self.out_channels
+            )
+        except RuntimeError:
+            breakpoint()
+
+
         # pad to the original sequence length
         conv_output = F.pad(
             conv_output, (0, 0, 0, seq_length - conv_output.size(-2))
         )
 
         return conv_output
+
 
 
 class HyenaProjection(nn.Module):
@@ -226,8 +239,8 @@ class HyenaProjection(nn.Module):
 
         return z
 
-
-# test the hyena projection
+#
+# # test the hyena projection
 # emb_dim = 2
 # n_order = 2
 # kernel_size = 3
@@ -238,7 +251,7 @@ class HyenaProjection(nn.Module):
 #
 # positions = torch.tensor([
 #     [0, 1, 2, 3, 1, 2, 3, 4, 5, 6],
-#     [1, 2, 3, 1, 2, 3, 4, 5, 6, 7]
+#     [1, 2, 3, 1, 2, 3, 4, 5, -1, -1]
 # ])
 #
 # test = HyenaProjection(emb_dim, n_order, kernel_size)
