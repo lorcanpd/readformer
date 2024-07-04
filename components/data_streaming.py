@@ -81,8 +81,7 @@ class BAMReadDataset(Dataset):
         # the number of file paths
         file_path = self.file_paths[idx % len(self.file_paths)]
         sex = self.metadata[
-            self.metadata['file_path'] == file_path.split('/')[-1]
-            ]['sex'].values[0]
+            self.metadata['file_path'] == file_path]['sex'].values[0]
         retries = 0
         max_retries = 10
 
