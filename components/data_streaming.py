@@ -67,10 +67,10 @@ class BAMReadDataset(Dataset):
         self.selected_positions = selected_positions
         self.min_quality = min_quality
         if os.path.isdir(file_paths):
+            basenames = set(self.metadata['file_path'].apply(os.path.basename))
             self.file_paths = [
                 os.path.join(file_paths, f) for f in os.listdir(file_paths)
-                if (f.endswith('.bam')
-                    and f in self.metadata['file_path'].values)
+                if (f.endswith('.bam') and f in basenames)
             ]
 
     def __len__(self):

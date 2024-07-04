@@ -1,6 +1,6 @@
 #!/bin/bash
 
-BASENAME="hyena_128dim_2group_2layer"
+BASENAME="45m_test_hyena_128d_2g_2l"
 
 LOG_DIR="logs/pretrain"
 
@@ -59,7 +59,7 @@ singularity exec --nv \
   ${SIF} \
   python3 /scripts/readformer/mlm_pretraining.py \
     --metadata_path /data/pretrain_metadata.csv \
-    --data_dir /data/pretrain_symlinks \
+    --data_dir /data/pretrain/BAM \
     --wandb_api_path /home/wandb_api_key \
     --model_dir /models \
     --num_heads ${NUM_HEADS} \
