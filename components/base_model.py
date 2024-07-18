@@ -1,8 +1,8 @@
 import torch.nn as nn
 
 # TODO fix the import statements
-from components.hyena import HyenaBlock, FeedForward
-from components.self_attention import MultiHeadSelfAttention
+from components.hyena import ReadformerBlock, FeedForward
+from components.self_attention import RoPEMultiHeadSelfAttention
 
 
 def init_weights(m):
@@ -63,11 +63,11 @@ class TransformerBlock(nn.Module):
         )
         self.hyena = hyena
         if hyena:
-            self.self_attention = HyenaBlock(
+            self.self_attention = ReadformerBlock(
                 emb_dim, n_order=heads, kernel_size=kernel_size
             )
         else:
-            self.self_attention = MultiHeadSelfAttention(
+            self.self_attention = RoPEMultiHeadSelfAttention(
                 emb_dim, num_heads=heads
             )
 
@@ -87,9 +87,9 @@ class TransformerBlock(nn.Module):
         normed_x = self.layer_norm1(x)
         self_attention_output = self.self_attention(normed_x, positions)
         # Residual connection
-        x = x + self_attention_output
+        # x = x + self_attention_output
         # Apply layer normalization before feedforward network
-        normed_x = self.layer_norm2(x)
+        normed_x = self.layer_norm2(self_attention_output)
         ff_output = self.feed_forward(normed_x)
         # Residual connection
         x = x + ff_output

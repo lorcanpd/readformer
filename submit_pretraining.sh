@@ -15,18 +15,21 @@ MODEL_DIR="/lustre/scratch126/casm/team274sb/lp23/readformer/models"
 GPU_MEMORY=40960
 MEMORY=16384
 CORES=4
-NUM_HEADS=2
-NUM_LAYERS=2
+NUM_HEADS=4
+NUM_LAYERS=4
 MIN_READ_QUALITY=20
 BATCH_SIZE=64
 EMB_DIM=128
 MAX_SEQUENCE_LENGTH=8192
 WARM_UP_EPOCHS=10
 EPOCHS_AT_INTERVAL=2
-ITERS_IN_EPOCH=1000
+ITERS_IN_EPOCH=10
 CORRUPTION_RATE="variable"
 PROPORTION_RANDOM=0.1
 MAIN_LR=1e-3
+
+CORRUPTION_SCALE=0.5
+NAME="TEST"
 
 #SCALES=( 0.5 0.75 0.9 )
 
@@ -60,6 +63,7 @@ singularity exec --nv \
   --pwd /scripts/readformer \
   ${SIF} \
   python3 /scripts/readformer/mlm_pretraining.py \
+    --hyena \
     --metadata_path /data/pretrain_metadata.csv \
     --data_dir /data/pretrain/BAM \
     --wandb_api_path /home/wandb_api_key \
@@ -76,7 +80,6 @@ singularity exec --nv \
     --corruption_rate ${CORRUPTION_RATE} \
     --proportion_random ${PROPORTION_RANDOM} \
     --main_lr ${MAIN_LR} \
-    --hyena \
     --corruption_scale ${CORRUPTION_SCALE} \
     --name ${NAME}
 

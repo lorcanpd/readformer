@@ -7,9 +7,9 @@ from components.rotary_encoding import (
 )
 
 
-class MultiHeadSelfAttention(nn.Module):
+class RoPEMultiHeadSelfAttention(nn.Module):
     """
-    Multi-Head Self-Attention layer with positional encoding.
+    Multi-Head Self-Attention layer with rotary positional encoding.
 
     :param emb_dim:
         The dimensionality of the embedding space.
@@ -25,7 +25,7 @@ class MultiHeadSelfAttention(nn.Module):
         Output tensor after applying multi-head self-attention.
     """
     def __init__(self, emb_dim, num_heads):
-        super(MultiHeadSelfAttention, self).__init__()
+        super(RoPEMultiHeadSelfAttention, self).__init__()
         assert emb_dim % num_heads == 0, \
             "Embedding dimension must be divisible by the number of heads"
 
@@ -122,3 +122,91 @@ class MultiHeadSelfAttention(nn.Module):
         output = self.out(context) * self.out_scale
 
         return output
+
+
+class MultiHeadSelfAttention(nn.Module):
+    """
+    Multi-Head Self-Attention layer without rotary positional encoding.
+
+    :param emb_dim:
+        The dimensionality of the embedding space.
+    :param num_heads:
+        The number of attention heads.
+
+    :param inputs:
+        x: Input tensor of shape (batch_size, seq_length, emb_dim).
+
+    :returns:
+        Output tensor after applying multi-head self-attention.
+    """
+    def __init__(self, emb_dim, num_heads):
+        super(MultiHeadSelfAttention, self).__init__()
+        assert emb_dim % num_heads == 0, \
+            "Embedding dimension must be divisible by the number of heads"
+
+        self.num_heads = num_heads
+        self.head_dim = emb_dim // num_heads
+        self.emb_dim = emb_dim
+
+        self.query = nn.Linear(emb_dim, emb_dim, bias=False)
+        self.key = nn.Linear(emb_dim, emb_dim, bias=False)
+        self.value = nn.Linear(emb_dim, emb_dim, bias=False)
+        self.out = nn.Linear(emb_dim, emb_dim, bias=False)
+
+        # Initialise scaling vectors
+        self.query_scale = nn.Parameter(torch.ones(1, 1, emb_dim))
+        self.key_scale = nn.Parameter(torch.ones(1, 1, emb_dim))
+        self.value_scale = nn.Parameter(torch.ones(1, 1, emb_dim))
+        self.out_scale = nn.Parameter(torch.ones(1, 1, emb_dim))
+
+
+    def init_scaling_vectors(self):
+        nn.init.ones_(self.query_scale)
+        nn.init.ones_(self.key_scale)
+        nn.init.ones_(self.value_scale)
+        nn.init.ones_(self.out_scale)
+
+    def freeze_scaling_vectors(self):
+        self.query_scale.requires_grad = False
+        self.key_scale.requires_grad = False
+        self.value_scale.requires_grad = False
+        self.out_scale.requires_grad = False
+
+    def unfreeze_scaling_vectors(self):
+        self.query_scale.requires_grad = True
+        self.key_scale.requires_grad = True
+        self.value_scale.requires_grad = True
+        self.out_scale.requires_grad = True
+
+    def forward(self, x):
+        batch_size, seq_length, emb_dim = x.size()
+        # Linear projections
+        Q = self.query(x) * self.query_scale
+        K = self.key(x) * self.key_scale
+        V = self.value(x) * self.value_scale
+        # Reshape for multi-head attention
+        Q = Q.view(
+            batch_size, seq_length, self.num_heads, self.head_dim
+        ).permute(0, 2, 1, 3)
+        K = K.view(
+            batch_size, seq_length, self.num_heads, self.head_dim
+        ).permute(0, 2, 1, 3)
+        V = V.view(
+            batch_size, seq_length, self.num_heads, self.head_dim
+        ).permute(0, 2, 1, 3)
+
+        # Compute attention scores
+        attention_scores = torch.matmul(
+            Q, K.transpose(-1, -2)
+        ) / torch.sqrt(torch.tensor(self.head_dim, dtype=torch.float32))
+        attention_probs = F.softmax(attention_scores, dim=-1)
+        # Compute the context
+        context = torch.matmul(attention_probs, V)
+        # Concatenate heads and put through final linear layer
+        context = context.permute(0, 2, 1, 3).contiguous().view(
+            batch_size, seq_length, self.emb_dim
+        )
+        output = self.out(context) * self.out_scale
+
+        return output
+

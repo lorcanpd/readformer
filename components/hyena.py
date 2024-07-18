@@ -5,187 +5,294 @@ import torch.nn.functional as F
 from components.rotary_encoding import (
     compute_theta_vector, compute_rotation_angles, apply_dimensionwise_rotation
 )
+from components.self_attention import MultiHeadSelfAttention
+
 from torch.nn.utils.rnn import pad_sequence
 
 
+# class ParallelFFTLongConv(nn.Module):
+#     def __init__(self):
+#         super(ParallelFFTLongConv, self).__init__()
 #
-# class CustomMaskedConv1D(nn.Module):
-#     """
-#     Custom masked 1D convolution layer that prevents aggregating signals from
-#     bases on different reads.
+#     def forward(self, inputs, filters, positions):
+#         batch_size, seq_length, emb_dim = inputs.shape
+#         outputs = torch.zeros_like(inputs)
 #
-#     :param kernel_size:
-#         Size of the convolution kernel.
-#     :param in_channels:
-#         Number of input channels.
-#     :param out_channels:
-#         Number of output channels.
-#     :param groups:
-#         Number of groups for the grouped convolution.
-#     :param stride:
-#         Stride of the convolution. Default is 1.
-#     """
-#     def __init__(
-#             self, kernel_size, in_channels, out_channels, groups, stride=1
-#     ):
-#         super(CustomMaskedConv1D, self).__init__()
-#         self.groups = groups
+#         position_differences = torch.diff(
+#             positions, dim=1,
+#             append=torch.full((batch_size, 1), -1, device=inputs.device)
+#         )
+#
+#         # Create a mask for the start of each segment
+#         segment_starts = F.pad(position_differences != 1, (1, 0), "constant", 1)
+#         # Create a mask for the end of each segment
+#         segment_ends = F.pad(position_differences != 1, (0, 1), "constant", 1)
+#
+#         # Gather all segment indices
+#         segmented_inputs = []
+#         segmented_filters = []
+#         max_seg_length = 0
+#         for b in range(batch_size):
+#             starts = torch.where(segment_starts[b])[0]
+#             ends = torch.where(segment_ends[b])[0]
+#             segments = [inputs[b, start:end] for start, end in zip(starts, ends) if start != end]
+#             filter_segs = [filters[b, start:end] for start, end in zip(starts, ends) if start != end]
+#             max_seg_length = max(max_seg_length, *[s.shape[0] for s in segments])
+#             segmented_inputs.extend(segments)
+#             segmented_filters.extend(filter_segs)
+#
+#         # Pad each segment to the maximum segment length
+#         padded_inputs = [F.pad(seg, (0, 0, 0, max_seg_length - seg.shape[0])) for seg in segmented_inputs]
+#         padded_filters = [F.pad(flt, (0, 0, 0, max_seg_length - flt.shape[0])) for flt in segmented_filters]
+#
+#         # Stack segments and apply FFT
+#         stacked_inputs = torch.stack(padded_inputs)
+#         stacked_filters = torch.stack(padded_filters)
+#         padded_length = 2 ** max_seg_length.bit_length()  # Using power of 2 for efficient FFT
+#
+#         inputs_fft = torch.fft.rfft(stacked_inputs, n=padded_length, dim=2, norm='forward')
+#         filters_fft = torch.fft.rfft(stacked_filters, n=padded_length, dim=2, norm='forward')
+#
+#         # Perform element-wise multiplication in the frequency domain and inverse FFT
+#         result_fft = inputs_fft * filters_fft
+#         conv_results = torch.fft.irfft(result_fft, n=padded_length, dim=2, norm='forward')
+#
+#         # Map results back to the output tensor
+#         segment_idx = 0
+#         breakpoint()
+#         for b in range(batch_size):
+#             starts = torch.where(segment_starts[b])[0]
+#             ends = torch.where(segment_ends[b])[0]
+#             for start, end in zip(starts, ends):
+#                 length = end - start
+#                 outputs[b, start:end] = conv_results[segment_idx, :length]
+#                 segment_idx += 1
+#
+#         return outputs
+
+
+
+# class IndependentDepthwiseSeparableConv1D(nn.Module):
+#     def __init__(self, kernel_size, in_channels, out_channels, groups, stride=1):
+#         super(IndependentDepthwiseSeparableConv1D, self).__init__()
 #         self.stride = stride
-#         # self.padding = padding
 #         self.kernel_size = kernel_size
-#         self.in_channels_per_group = in_channels // groups
-#         self.out_channels_per_group = out_channels // groups
-#         self.kernel = nn.Parameter(
-#             nn.init.kaiming_uniform_(
-#                 torch.randn(
-#                     1, 1, groups,
-#                     self.out_channels_per_group,
-#                     self.in_channels_per_group,
-#                     kernel_size
-#                 )
-#             )
+#         self.in_channels = in_channels
+#         self.out_channels = out_channels
+#         self.groups = groups
+#
+#         # Depthwise convolution
+#         self.depthwise = nn.Conv1d(
+#             in_channels, out_channels, kernel_size,
+#             stride=stride, groups=groups, padding=kernel_size//2
 #         )
 #
 #     def forward(self, inputs, positions):
 #         """
-#         Perform the forward pass of the position-aware masked convolution.
+#         Apply convolutions with splitting and independent processing.
 #
-#         :param inputs:
-#             Input tensor of shape (batch_size, seq_length, in_channels).
-#         :param positions:
-#             Position tensor of shape (batch_size, seq_length).
-#         :return:
-#             Output tensor after masked convolution.
+#         :param inputs: Input tensor of shape (batch_size, seq_length, in_channels).
+#         :param positions: Position tensor indicating where to split the sequence.
+#         :return: Output tensor after processing.
 #         """
-#         self.kernel = self.kernel.to(inputs.device)
+#         batch_size, seq_length, emb_size = inputs.shape
 #
-#         batch_size, seq_length, _ = inputs.size()
-#         kernel_center = self.kernel_size // 2
-#
-#         # Efficient padding integrated with unfold
-#         input_patches = F.pad(
-#             inputs, (0, 0, kernel_center, kernel_center), mode='reflect'
-#         ).unfold(1, self.kernel_size, self.stride).contiguous()
-#         position_patches = F.pad(
-#             positions, (kernel_center, kernel_center), value=-1
-#         ).unfold(1, self.kernel_size, self.stride)
-#
-#         # Calculate the expected positions and create the mask
-#         expected_positions = position_patches[:, :, kernel_center].unsqueeze(
-#             2) + torch.arange(
-#             -kernel_center, kernel_center + 1, device=inputs.device
+#         # Compute differences to identify gaps
+#         position_differences = torch.diff(
+#             positions, dim=1,
+#             append=torch.full((batch_size, 1), -1, device=inputs.device)
 #         )
-#         mask = (position_patches == expected_positions).float().unsqueeze(-2)
+#         # Identify boundaries where the absolute differences between adjacent
+#         # positions are not equal to 1 and are finite.
+#         boundaries = (position_differences != 1)
+#         not_boundaries = (position_differences == 0)  # Padded positions
+#         final_boundaries = boundaries & ~not_boundaries
 #
-#         # Apply the mask using in-place operations
-#         input_patches.mul_(mask)
+#         # Create new tensor with padding inserted at the boundaries
+#         padded_inputs = []
+#         for i in range(batch_size):
+#             # Split input into segments without crossing boundaries
+#             segments = []
+#             last_index = 0
+#             for idx in torch.where(final_boundaries[i])[0] + 1:
+#                 segments.append(inputs[i, last_index:idx])
+#                 # Add padding segments
+#                 if idx < seq_length:
+#                     segments.append(
+#                         torch.zeros((self.kernel_size // 2, emb_size),
+#                                     device=inputs.device)
+#                     )
+#                 last_index = idx
+#             # Add the last segment
+#             segments.append(inputs[i, last_index:])
+#             padded_inputs.append(torch.cat(segments, dim=-2))
+#         # Pad the sequences to the same length as come may contain more segments
+#         # than others.
+#         padded_inputs = pad_sequence(
+#             padded_inputs, batch_first=True, padding_value=0
+#         ).to(inputs.device)
+#         # Concatenate all batch segments and apply depthwise convolution
+#         # padded_inputs = torch.stack(padded_inputs).to(inputs.device)
+#         conv_output = self.depthwise(
+#             padded_inputs.transpose(1, 2)
+#         ).transpose(1, 2)
+#         # Remove the indices that were added as padding. This is done by
+#         # removing the indices of vectors that sum to zero in the padded
+#         # inputs from the conv_output. Then reshape the output to the original
+#         # shape.
 #
-#         # Use view to reshape input patches to reduce copying data
-#         grouped_input_patches = input_patches.view(
-#             batch_size, seq_length, self.groups, self.in_channels_per_group,
-#             self.kernel_size
+#         try:
+#             # conv_output = conv_output[torch.sum(padded_inputs, dim=-1) != 0].view(
+#             #     batch_size, -1, self.out_channels
+#             # )
+#             # identify vectors of zeros in the padded inputs
+#             # zero_vectors = torch.all(padded_inputs != 0, dim=-1)
+#             conv_output = conv_output[
+#                 torch.all(padded_inputs != 0, dim=-1)
+#             ].view(
+#                 batch_size, -1, self.out_channels
+#             )
+#         except RuntimeError:
+#             breakpoint()
+#
+#
+#         # pad to the original sequence length
+#         conv_output = F.pad(
+#             conv_output, (0, 0, 0, seq_length - conv_output.size(-2))
 #         )
 #
-#         # Elementwise multiplication using broadcasting
-#         conv_result = grouped_input_patches.unsqueeze(-3) * self.kernel
-#
-#         # Sum over the last two dimensions
-#         output = conv_result.sum(dim=(-1, -2))
-#
-#         return output
+#         return conv_output
+
+def adjust_positions(positions):
+    dtype = positions.dtype
+    adjusted_positions = positions.clone().to(torch.float32)
+    adjusted_positions[adjusted_positions == -1] = torch.inf
+
+    # Calculate the minimum value ignoring -1 (now inf)
+    min_positions = adjusted_positions.min(dim=-1, keepdim=True)[0]
+
+    # Subtract the minimum values from the original positions, -1 stays
+    # unaffected
+    adjusted_positions = positions - min_positions
+
+    # Reset -1 values to their original state
+    adjusted_positions[positions == -1] = -1
+
+    return adjusted_positions.to(dtype)
 
 
-class IndependentDepthwiseSeparableConv1D(nn.Module):
-    def __init__(self, kernel_size, in_channels, out_channels, groups, stride=1):
-        super(IndependentDepthwiseSeparableConv1D, self).__init__()
-        self.stride = stride
-        self.kernel_size = kernel_size
-        self.in_channels = in_channels
-        self.out_channels = out_channels
-        self.groups = groups
+def split_into_reads(embeddings, positions):
+    batch_size, seq_length, emb_dim = embeddings.shape
 
-        # Depthwise convolution
-        self.depthwise = nn.Conv1d(
-            in_channels, out_channels, kernel_size,
-            stride=stride, groups=groups, padding=kernel_size//2
+    # Calculate position differences to determine the boundaries of segments
+    position_differences = torch.diff(
+        positions, dim=1,
+        append=torch.full((batch_size, 1), -1, device=embeddings.device)
+    )
+
+    # Create a mask for the start of each segment. Do this by adding a true to
+    # start of position differences != 1 tensor. Remove the final element to
+    # prevent out of bounds indexing.
+    # segment_starts = torch.cat((torch.full((batch_size, 1), True, device=embeddings.device) ,position_differences != 1), dim=1)
+    segment_starts = torch.cat(
+        tensors=(
+            torch.full(
+                (batch_size, 1), True, device=embeddings.device
+            ),
+            position_differences != 1
+        ), dim=1)[..., :-1]
+    segment_ends = position_differences != 1
+
+    # Gather all segment indices
+    segmented_inputs = []
+    segmented_positions = []
+    segment_starts_indices = []
+    segment_ends_indices = []
+    batch_indices = []
+    max_seg_length = 0
+    for b in range(batch_size):
+        starts = torch.where(segment_starts[b])[0]
+        ends = torch.where(segment_ends[b])[0]
+        for start, end in zip(starts, ends):
+            if start != end:
+                segmented_inputs.append(embeddings[b, start:end+1])
+                segmented_positions.append(positions[b, start:end+1])
+                segment_starts_indices.append(start)
+                # segment_ends_indices.append(end)
+                batch_indices.append(b)
+                max_seg_length = max(max_seg_length, end + 1 - start)
+
+
+    # Pad each segment to the maximum segment length
+    padded_inputs = [
+        F.pad(seg, (0, 0, 0, max_seg_length - seg.shape[0]))
+        for seg in segmented_inputs
+    ]
+    reshaped_positions = [
+        F.pad(pos, (0, max_seg_length - pos.shape[0]), value=-1)
+        for pos in segmented_positions
+    ]
+
+    return (torch.stack(padded_inputs), torch.stack(reshaped_positions),
+            torch.stack(segment_starts_indices),
+            # torch.stack(segment_ends_indices),
+            torch.tensor(batch_indices))
+
+
+def reassamble_sequences(original_shape, read_tensor, positions, segment_starts, batch_indices):
+    # batch_size, seq_length, emb_dim = read_tensor.shape
+    output = torch.zeros(original_shape, device=read_tensor.device)
+
+    for processed_read, read_positions, start_idx, batch_idx in zip(
+        read_tensor, positions, segment_starts, batch_indices
+    ):
+        read_vectors = processed_read[read_positions != -1]
+        # read_positions = read_positions[read_positions != -1]
+
+        output[batch_idx, start_idx:start_idx + len(read_vectors)] = read_vectors
+
+    return output
+
+
+def reshape_by_position_and_track(inputs, positions):
+    batch_size, seq_length, emb_dim = inputs.shape
+    max_embeddings_count = 0
+    index_map = {}
+
+    combos = {}
+
+    out_tensor_index = 0
+    # Collect embeddings by their positions and sequence
+    for b in range(batch_size):
+        position_counter = {}
+        for i in range(seq_length):
+            pos = positions[b, i].item()
+            if pos != -1:
+                if pos not in position_counter:
+                    position_counter[pos] = 0
+                else:
+                    position_counter[pos] += 1
+
+                if (b, pos) not in combos:
+                    combos[(b, pos)] = out_tensor_index
+                    out_tensor_index += 1
+                key = (b, i)
+                value = (combos[(b, pos)], position_counter[pos])
+                index_map[key] = value
+        max_embeddings_count = max(
+            max_embeddings_count, max(position_counter.values()) + 1
         )
 
-    def forward(self, inputs, positions):
-        """
-        Apply convolutions with splitting and independent processing.
+    all_positions_tensor = torch.zeros(
+        (len(combos), max_embeddings_count, emb_dim)
+    )
 
-        :param inputs: Input tensor of shape (batch_size, seq_length, in_channels).
-        :param positions: Position tensor indicating where to split the sequence.
-        :return: Output tensor after processing.
-        """
-        batch_size, seq_length, emb_size = inputs.shape
+    for key, value in index_map.items():
+        old_row, old_idx = key
+        new_row, new_idx = value
+        all_positions_tensor[new_row, new_idx] = inputs[old_row, old_idx]
 
-        # Compute differences to identify gaps
-        position_differences = torch.diff(
-            positions, dim=1,
-            append=torch.full((batch_size, 1), -1, device=inputs.device)
-        )
-        # Identify boundaries where the absolute differences between adjacent
-        # positions are not equal to 1 and are finite.
-        boundaries = (position_differences != 1)
-        not_boundaries = (position_differences == 0)  # Padded positions
-        final_boundaries = boundaries & ~not_boundaries
-
-        # Create new tensor with padding inserted at the boundaries
-        padded_inputs = []
-        for i in range(batch_size):
-            # Split input into segments without crossing boundaries
-            segments = []
-            last_index = 0
-            for idx in torch.where(final_boundaries[i])[0] + 1:
-                segments.append(inputs[i, last_index:idx])
-                # Add padding segments
-                if idx < seq_length:
-                    segments.append(
-                        torch.zeros((self.kernel_size // 2, emb_size),
-                                    device=inputs.device)
-                    )
-                last_index = idx
-            # Add the last segment
-            segments.append(inputs[i, last_index:])
-            padded_inputs.append(torch.cat(segments, dim=-2))
-        # Pad the sequences to the same length as come may contain more segments
-        # than others.
-        padded_inputs = pad_sequence(
-            padded_inputs, batch_first=True, padding_value=0
-        ).to(inputs.device)
-        # Concatenate all batch segments and apply depthwise convolution
-        # padded_inputs = torch.stack(padded_inputs).to(inputs.device)
-        conv_output = self.depthwise(
-            padded_inputs.transpose(1, 2)
-        ).transpose(1, 2)
-        # Remove the indices that were added as padding. This is done by
-        # removing the indices of vectors that sum to zero in the padded
-        # inputs from the conv_output. Then reshape the output to the original
-        # shape.
-
-        try:
-            # conv_output = conv_output[torch.sum(padded_inputs, dim=-1) != 0].view(
-            #     batch_size, -1, self.out_channels
-            # )
-            # identify vectors of zeros in the padded inputs
-            # zero_vectors = torch.all(padded_inputs != 0, dim=-1)
-            conv_output = conv_output[
-                torch.all(padded_inputs != 0, dim=-1)
-            ].view(
-                batch_size, -1, self.out_channels
-            )
-        except RuntimeError:
-            breakpoint()
-
-
-        # pad to the original sequence length
-        conv_output = F.pad(
-            conv_output, (0, 0, 0, seq_length - conv_output.size(-2))
-        )
-
-        return conv_output
-
+    return all_positions_tensor, index_map
 
 
 class HyenaProjection(nn.Module):
@@ -210,9 +317,9 @@ class HyenaProjection(nn.Module):
         #     kernel_size, self.groups * emb_dim, self.groups * emb_dim,
         #     self.groups
         # )
-        self.custom_conv = IndependentDepthwiseSeparableConv1D(
-            kernel_size, self.groups * emb_dim, self.groups * emb_dim,
-            self.groups
+        self.conv = nn.Conv1d(
+            self.groups * emb_dim, self.groups * emb_dim, kernel_size,
+            groups=self.groups, padding=kernel_size//2
         )
 
     def forward(self, inputs, positions):
@@ -231,7 +338,9 @@ class HyenaProjection(nn.Module):
         self.W = self.W.to(device)
         x = inputs
         x = torch.matmul(x, self.W)
-        z = self.custom_conv(x, positions)
+        z = self.conv(x.transpose(1,2))
+        # Set the values at the padded positions to zero
+        z = z * (positions != -1).unsqueeze(-2).to(torch.float32)
         # Reshape z to batch_size x D x N x L
         z = z.reshape(z.size(0), self.emb_dim, self.groups, -1)
         # Unstack the groups for separate processing
@@ -239,24 +348,7 @@ class HyenaProjection(nn.Module):
 
         return z
 
-#
-# # test the hyena projection
-# emb_dim = 2
-# n_order = 2
-# kernel_size = 3
-# seq_length = 10
-# batch_size = 2
-#
-# inputs = torch.randn(batch_size, seq_length, emb_dim)
-#
-# positions = torch.tensor([
-#     [0, 1, 2, 3, 1, 2, 3, 4, 5, 6],
-#     [1, 2, 3, 1, 2, 3, 4, 5, -1, -1]
-# ])
-#
-# test = HyenaProjection(emb_dim, n_order, kernel_size)
-#
-# output = test(inputs, positions)
+
 
 
 class FeedForward(nn.Module):
@@ -371,9 +463,11 @@ class HyenaFilter(nn.Module):
         """
         device = embeddings.device
         self.theta_vector = self.theta_vector.to(device)
-
+        # make each sequence in the positions batch be normalised so that the
+        # lowest position is 0 in each sequence. Must ignore -1 values.
+        adjusted_positions = adjust_positions(positions)
         rotation_matrices = compute_rotation_angles(
-            positions, self.emb_dim, self.theta_vector
+            adjusted_positions, self.emb_dim, self.theta_vector
         )
         t = apply_dimensionwise_rotation(embeddings, rotation_matrices)
         h_hat = self.ffn(t)
@@ -400,16 +494,18 @@ class FFTLongConv(nn.Module):
     def __init__(self):
         super(FFTLongConv, self).__init__()
 
-    def forward(self, inputs, filters):
+    def forward(self, inputs, filters, positions):
         """
         Perform the forward pass of the FFT-based long convolution.
 
         :param inputs:
-            Input tensor of shape (batch_size, seq_length).
+            Input tensor of shape (batch_size, emb_dim, seq_length).
         :param filters:
-            Filters tensor of shape (batch_size, seq_length).
+            Filters tensor of shape (batch_size, emb_dim, seq_length).
+        :param positions:
+            Position tensor of shape (batch_size, seq_length).
         :return:
-            Convolution result tensor of shape (batch_size, seq_length).
+            Convolution result tensor of shape (batch_size, emb_dim, seq_length).
         """
         L = inputs.size(-1)
         padded_length = 2 * L  # Double the length for FFT
@@ -430,11 +526,13 @@ class FFTLongConv(nn.Module):
             inputs, n=padded_length, dim=-1, norm='forward'
         )
         # Remove padding
-        return result[..., :L]
+        result = result[..., :L]
+        # Zero out the padded positions. These positions do not represent
+        # nucleotides and should not contribute to the convolution result.
+        return result * (positions != -1).unsqueeze(-2).to(torch.float32)
 
 
-
-class HyenaBlock(nn.Module):
+class ReadformerBlock(nn.Module):
     """
     A custom, position-aware Hyena block combining projection, filter, and
     FFT-based long convolution. Can be used as a direct replacement to
@@ -450,7 +548,7 @@ class HyenaBlock(nn.Module):
         Size of the convolution kernel.
     """
     def __init__(self, emb_dim, n_order, kernel_size):
-        super(HyenaBlock, self).__init__()
+        super(ReadformerBlock, self).__init__()
         self.n_order = n_order
         self.embedding_dim = emb_dim
         self.kernel_size = kernel_size
@@ -462,6 +560,11 @@ class HyenaBlock(nn.Module):
         )
         self.B = nn.Parameter(
             nn.init.kaiming_uniform_(torch.randn((n_order, 1, emb_dim, 1)))
+        )
+        self.layer_norm = nn.LayerNorm(emb_dim)
+        self.self_attention = MultiHeadSelfAttention(emb_dim, 8)
+        self.W0 = nn.Parameter(
+            nn.init.kaiming_uniform_(torch.randn(emb_dim, emb_dim))
         )
 
     def forward(self, embeddings, positions):
@@ -477,19 +580,82 @@ class HyenaBlock(nn.Module):
         """
 
         device = embeddings.device
+        original_shape = embeddings.shape
         self.B = self.B.to(device)
         self.output_projection = self.output_projection.to(device)
 
-        *x, v = self.projection(embeddings, positions)
-        filters = self.filter(embeddings, positions)
+        # Split the input embeddings into reads
+        (
+            read_embeddings, read_positions, start_indices, batch_indices
+        ) = split_into_reads(embeddings, positions)
+
+        # padding = where read_positions are -1 for an element
+        not_padded = read_positions != -1
+        *x, v = self.projection(read_embeddings, read_positions)
+        filters = self.filter(read_embeddings, read_positions)
+
 
         for i, x_i in enumerate(x):
+            # Multiply filter by not_padded to zero out the padded positions.
             h_i = filters[i]
-            v = x_i * (v * self.B[i] + self.fft_long_conv(v, h_i))
+            v = x_i * (v * self.B[i] + self.fft_long_conv(v, h_i, read_positions))
 
         # Transpose v to shape (batch_size, seq_len, emb_dim)
         v = v.transpose(2, 1)
-        output = v.matmul(self.output_projection)
 
-        return output
+        hyena_out = v.matmul(self.output_projection)
 
+        hyena_out = reassamble_sequences(
+            original_shape, hyena_out, read_positions, start_indices,
+            batch_indices
+        )
+
+        # Apply residual connection
+        hyena_out = self.layer_norm(hyena_out + embeddings)
+
+        # Use position information to reshape the hyena_out into "sequences"
+        # containing the embeddings of nucleotides at the same position in
+        # different reads in the same sequence.
+
+        embs_by_position, index_map = reshape_by_position_and_track(
+            hyena_out, positions
+        )
+
+        self_attention_out = self.self_attention(embs_by_position)
+        self_attention_out = self_attention_out.matmul(self.W0)
+
+        # Reshape the self-attention output to the original shape using the
+        # position_index_map
+        output = torch.zeros(original_shape, device=hyena_out.device)
+
+        for key, index in index_map.items():
+            old_row, old_idx = key
+            new_row, new_idx = index
+            output[old_row, old_idx] = self_attention_out[new_row, new_idx]
+
+        # Residual connection
+        return output + hyena_out
+
+
+
+
+# test
+# emb_dim = 16
+# n_order = 2
+# kernel_size = 3
+# seq_length = 10
+# batch_size = 2
+#
+# inputs = torch.randn(batch_size, seq_length, emb_dim)
+#
+# positions = torch.tensor([
+#     [0, 1, 2, 3, 1, 2, 3, 4, 5, 6],
+#     [1, 2, 3, 1, 2, 3, 4, 5, -1, -1]
+# ])
+#
+# # Mask the inputs with 0s where the positions are -1
+# inputs = inputs * (positions != -1).unsqueeze(-1).to(torch.float32)
+#
+# readformer = ReadformerBlock(emb_dim, n_order, kernel_size)
+#
+# output = readformer(inputs, positions)
