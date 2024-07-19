@@ -188,7 +188,7 @@ def split_into_reads(embeddings, positions):
     position_differences = torch.diff(
         positions, dim=1,
         append=torch.full((batch_size, 1), -1, device=embeddings.device)
-    )
+    ).to(embeddings.device)
 
     # Create a mask for the start of each segment. Do this by adding a true to
     # start of position differences != 1 tensor. Remove the final element to
@@ -197,11 +197,13 @@ def split_into_reads(embeddings, positions):
     segment_starts = torch.cat(
         tensors=(
             torch.full(
-                (batch_size, 1), True, device=embeddings.device
+                size=(batch_size, 1), fill_value=True, device=embeddings.device
             ),
             position_differences != 1
-        ), dim=1)[..., :-1]
-    segment_ends = position_differences != 1
+        ),
+        dim=1
+    )[..., :-1]
+    segment_ends = (position_differences != 1).to(embeddings.device)
 
     # Gather all segment indices
     segmented_inputs = []
@@ -233,10 +235,10 @@ def split_into_reads(embeddings, positions):
         for pos in segmented_positions
     ]
 
-    return (torch.stack(padded_inputs), torch.stack(reshaped_positions),
-            torch.stack(segment_starts_indices),
-            # torch.stack(segment_ends_indices),
-            torch.tensor(batch_indices))
+    return (torch.stack(padded_inputs).to(embeddings.device),
+            torch.stack(reshaped_positions).to(embeddings.device),
+            torch.stack(segment_starts_indices).to(embeddings.device),
+            torch.tensor(batch_indices).to(embeddings.device))
 
 
 def reassamble_sequences(original_shape, read_tensor, positions, segment_starts, batch_indices):
@@ -284,7 +286,7 @@ def reshape_by_position_and_track(inputs, positions):
         )
 
     all_positions_tensor = torch.zeros(
-        (len(combos), max_embeddings_count, emb_dim)
+        (len(combos), max_embeddings_count, emb_dim), device=inputs.device
     )
 
     for key, value in index_map.items():
@@ -637,7 +639,7 @@ class ReadformerBlock(nn.Module):
         return output + hyena_out
 
 
-
+# Todo FIX device crap so can run on GPU.
 
 # test
 # emb_dim = 16
