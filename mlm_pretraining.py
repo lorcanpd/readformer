@@ -123,6 +123,12 @@ def load_checkpoint(
 
 
 if __name__ == '__main__':
+
+    if torch.cuda.is_available():
+        torch.set_default_tensor_type(torch.cuda.FloatTensor)
+    else:
+        torch.set_default_tensor_type(torch.FloatTensor)
+
     args = get_args()
 
     if not os.path.exists(args.model_dir):
