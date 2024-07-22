@@ -50,7 +50,7 @@ for scale in "${SCALES[@]}"; do
 #BSUB -n ${CORES}
 #BSUB -gpu "mode=shared:num=1:gmem=${GPU_MEMORY}"
 #BSUB -R "select[mem>${MEMORY}] rusage[mem=${MEMORY}] span[hosts=1]"
-#BSUB -W 00:45
+#BSUB -W 6:00
 
 module load cellgen/singularity
 
