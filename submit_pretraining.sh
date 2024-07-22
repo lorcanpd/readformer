@@ -1,6 +1,6 @@
 #!/bin/bash
 
-BASENAME="45min_test_readformer_128d_2g_2l"
+BASENAME="6hour_test_readformer_128d_4g_4l"
 
 LOG_DIR="logs/pretrain"
 

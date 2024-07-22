@@ -415,7 +415,7 @@ if __name__ == '__main__':
         loss.backward()
         torch.nn.utils.clip_grad_norm_(readformer.parameters(), max_norm=1)
         optimiser.step()
-        # print(f"Loss at iteration {i}: {loss.item()}")
+        print(f"DEBUGGING - Loss at iteration {i}: {loss.item()}")
 
         if args.wandb:
             wandb.log(
@@ -466,11 +466,13 @@ if __name__ == '__main__':
                 f"Epoch {epoch}: , "
                 f"Mean Main Loss: {mean_loss} "
             )
+
             if j < len(intervals) - 1 and epoch % epochs_at_interval == 0:
                 j += 1
 
             epoch += 1
             epoch_losses = []
+
 
     if args.wandb:
         wandb.finish()
