@@ -242,11 +242,11 @@ if __name__ == '__main__':
 
     # Set the scaling vectors to one and freeze them.
     for layer in readformer.layers:
-        if not args.hyena:
+        if not args.readformer:
             layer.self_attention.init_scaling_vectors()
             layer.self_attention.freeze_scaling_vectors()
-        layer.feed_forward.init_scaling_vector()
-        layer.feed_forward.freeze_scaling_vector()
+        # layer.feed_forward.init_scaling_vector()
+        # layer.feed_forward.freeze_scaling_vector()
 
     classifier = MLMClassifier(
         emb_dim=emb_dim, num_classes=nucleotide_embeddings.padding_idx

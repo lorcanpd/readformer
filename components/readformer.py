@@ -10,6 +10,9 @@ from components.rotary_encoding import (
 )
 from components.self_attention import MultiHeadSelfAttention
 
+# TODO: Create some sort of scaling vector system for rapid fine-tuning. Perhaps
+# allow full finetuning for the Hyena-based components and partial finetuning
+# for the self-attention components and feedforward.
 
 def adjust_positions(positions):
     dtype = positions.dtype
