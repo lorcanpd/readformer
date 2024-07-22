@@ -1,8 +1,8 @@
 import torch.nn as nn
 
 # TODO fix the import statements
-from components.hyena import ReadformerBlock, FeedForward
-from components.self_attention import RoPEMultiHeadSelfAttention
+from components.readformer import ReadformerBlock
+from components.self_attention import TransformerBlock
 
 
 def init_weights(m):
@@ -27,75 +27,6 @@ def init_weights(m):
         else:
             nn.init.zeros_(m)
 
-    # if hasattr(m, 'name') and m.name == "scaling_vector":
-    #     nn.init.ones_(m)
-    # elif isinstance(m, nn.Module):
-    #     for name, param in m.named_parameters():
-    #         if "scaling_vector" in name:
-    #             nn.init.ones_(param)
-
-
-class TransformerBlock(nn.Module):
-    """
-    Transformer block that can switch between self-attention and Hyena block.
-
-    :param emb_dim:
-        Dimension of the input embeddings.
-    :param heads:
-        Number of heads for self-attention or global filters for the Hyena
-        block.
-    :param hyena:
-        Whether to use the Hyena block instead of self-attention. Default is
-        False.
-    :param kernel_size:
-        Size of the convolution kernel for the Hyena block. Default is 3.
-    """
-    def __init__(self, emb_dim, heads, hyena=False, kernel_size=3):
-        super(TransformerBlock, self).__init__()
-        self.layer_norm1 = nn.LayerNorm(emb_dim, eps=1e-7)
-        nn.init.ones_(self.layer_norm1.weight)
-        nn.init.zeros_(self.layer_norm1.bias)
-        self.layer_norm2 = nn.LayerNorm(emb_dim, eps=1e-7)
-        nn.init.ones_(self.layer_norm2.weight)
-        nn.init.zeros_(self.layer_norm2.bias)
-        self.feed_forward = FeedForward(
-            emb_dim, hidden_dim=emb_dim, activation="mish"
-        )
-        self.hyena = hyena
-        if hyena:
-            self.self_attention = ReadformerBlock(
-                emb_dim, n_order=heads, kernel_size=kernel_size
-            )
-        else:
-            self.self_attention = RoPEMultiHeadSelfAttention(
-                emb_dim, num_heads=heads
-            )
-
-    def forward(self, x, positions):
-        """
-        Perform the forward pass of the transformer block.
-
-        :param x:
-            Input tensor of shape (batch_size, seq_length, emb_dim).
-        :param positions:
-            Position tensor of shape (batch_size, seq_length).
-        :returns:
-            Output tensor after applying self-attention/Hyena block and
-            feedforward network.
-        """
-        # Apply layer normalisation before self-attention
-        normed_x = self.layer_norm1(x)
-        self_attention_output = self.self_attention(normed_x, positions)
-        # Residual connection
-        # x = x + self_attention_output
-        # Apply layer normalization before feedforward network
-        normed_x = self.layer_norm2(self_attention_output)
-        ff_output = self.feed_forward(normed_x)
-        # Residual connection
-        x = x + ff_output
-
-        return x
-
 
 class Model(nn.Module):
     """
@@ -108,28 +39,40 @@ class Model(nn.Module):
         block.
     :param num_layers:
         Number of transformer blocks.
-    :param hyena:
+    :param readformer:
         Whether to use the Hyena block instead of self-attention. Default is
-        False.
+        True.
     :param kernel_size:
-        Size of the convolution kernel for the Hyena block. Default is 3.
+        Size of the convolution kernel for the Hyena local CNN. Default is 3.
     """
-    def __init__(self, emb_dim, heads, num_layers, hyena=False, kernel_size=3):
+    def __init__(
+            self, emb_dim, num_layers, readformer=True, kernel_size=3, heads=8,
+            n_order=4
+    ):
         super(Model, self).__init__()
         self.emb_dim = emb_dim
         self.heads = heads
         self.num_layers = num_layers
-        self.hyena = hyena
         self.kernel_size = kernel_size
 
-        self.layers = nn.ModuleList(
-            [
-                TransformerBlock(
-                    emb_dim, heads, hyena=hyena, kernel_size=kernel_size
-                )
-                for _ in range(num_layers)
-            ]
-        )
+        if readformer:
+            self.layers = nn.ModuleList(
+                [
+                    ReadformerBlock(
+                        emb_dim, n_order, kernel_size
+                    )
+                    for _ in range(num_layers)
+                ]
+            )
+        else:
+            self.layers = nn.ModuleList(
+                [
+                    TransformerBlock(
+                        emb_dim, heads
+                    )
+                    for _ in range(num_layers)
+                ]
+            )
 
     def forward(self, x, positions):
         """
@@ -146,3 +89,33 @@ class Model(nn.Module):
             x = layer(x, positions)
 
         return x
+
+
+
+
+# test
+
+import torch
+
+emb_dim = 16
+n_order = 2
+kernel_size = 3
+seq_length = 10
+batch_size = 2
+
+inputs = torch.randn(batch_size, seq_length, emb_dim)
+
+positions = torch.tensor([
+    [0, 1, 2, 3, 1, 2, 3, 4, 5, 6],
+    [1, 2, 3, 1, 2, 3, 4, 5, -1, -1]
+])
+
+# Mask the inputs with 0s where the positions are -1
+inputs = inputs * (positions != -1).unsqueeze(-1).to(torch.float32)
+
+readformer = Model(
+    emb_dim, num_layers=2, readformer=True, kernel_size=3, heads=8,
+    n_order=4
+)
+
+output = readformer(inputs, positions)

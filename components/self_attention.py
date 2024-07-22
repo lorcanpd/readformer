@@ -5,6 +5,7 @@ import torch.nn.functional as F
 from components.rotary_encoding import (
     compute_theta_vector, compute_rotation_angles, apply_dimensionwise_rotation
 )
+from components.hyena import FeedForward
 
 
 class RoPEMultiHeadSelfAttention(nn.Module):
@@ -210,3 +211,51 @@ class MultiHeadSelfAttention(nn.Module):
 
         return output
 
+
+class TransformerBlock(nn.Module):
+    """
+    Transformer block that can switch between self-attention and Hyena block.
+
+    :param emb_dim:
+        Dimension of the input embeddings.
+    :param heads:
+        Number of heads for self-attention or global filters for the Hyena
+        block.
+    """
+    def __init__(self, emb_dim, heads):
+        super(TransformerBlock, self).__init__()
+        self.layer_norm1 = nn.LayerNorm(emb_dim, eps=1e-7)
+        nn.init.ones_(self.layer_norm1.weight)
+        nn.init.zeros_(self.layer_norm1.bias)
+        self.layer_norm2 = nn.LayerNorm(emb_dim, eps=1e-7)
+        nn.init.ones_(self.layer_norm2.weight)
+        nn.init.zeros_(self.layer_norm2.bias)
+        self.feed_forward = FeedForward(
+            emb_dim, hidden_dim=emb_dim, activation="mish"
+        )
+        self.self_attention = RoPEMultiHeadSelfAttention(
+            emb_dim, num_heads=heads
+        )
+
+    def forward(self, embeddings, positions):
+        """
+        Perform the forward pass of the transformer block.
+
+        :param embeddings:
+            Input tensor of shape (batch_size, seq_length, emb_dim).
+        :param positions:
+            Position tensor of shape (batch_size, seq_length).
+        :returns:
+            Output tensor after applying self-attention and feedforward network.
+        """
+        # Apply layer normalisation before self-attention
+        self_attention_input = self.layer_norm1(embeddings)
+        self_attention_out = self.self_attention(
+            self_attention_input, positions
+        ) + embeddings
+        ffn_input = self.layer_norm2(self_attention_out)
+        ffn_output = self.feed_forward(ffn_input)
+        # Residual connection
+        output = ffn_output + self_attention_out
+
+        return output
