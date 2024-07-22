@@ -39,8 +39,12 @@ def get_args():
         default='/lustre/scratch126/casm/team274sb/lp23/readformer/data/pretrain_metadata.csv',
         help='Directory containing the data.'
     )
-    parser.add_argument('--num_heads', type=int, default=16,
+    parser.add_argument('--num_heads', type=int, default=8,
                         help='Number of attention heads.')
+    parser.add_argument(
+        '--n_order', type=int, default=4,
+        help='Number of times hyena convolutions are applied in layers.'
+    )
     parser.add_argument('--num_layers', type=int, default=12,
                         help='Number of layers in the model.')
     parser.add_argument('--min_read_quality', type=int, default=30,
@@ -72,8 +76,8 @@ def get_args():
     parser.add_argument('--wandb', action='store_true',
                         help='Whether to use wandb for logging.')
     parser.add_argument(
-        '--hyena', action='store_true',
-        help='Use hyena model configuration'
+        '--readformer', action='store_true',
+        help='Use readformer model configuration'
     )
     parser.add_argument('--kernel_size', type=int, default=15,
                         help='Kernel size for the Hyena block.')
@@ -137,6 +141,7 @@ if __name__ == '__main__':
     data_dir = args.data_dir
     num_heads = args.num_heads
     num_layers = args.num_layers
+    n_order = args.n_order
     min_read_quality = args.min_read_quality
     batch_size = args.batch_size
     emb_dim = args.emb_dim
@@ -148,7 +153,7 @@ if __name__ == '__main__':
     corruption_rate = args.corruption_rate
     proportion_random = args.proportion_random
     main_lr = args.main_lr
-    hyena = args.hyena
+    readformer = args.readformer
     kernel_size = args.kernel_size
     checkpoint_path = f"{args.model_dir}/{args.name}_latest.pth"
     wand_api_path = args.wandb_api_path
@@ -158,6 +163,7 @@ if __name__ == '__main__':
     print(f"data_dir: {data_dir}")
     print(f"num_heads: {num_heads}")
     print(f"num_layers: {num_layers}")
+    print(f"n_order: {n_order}")
     print(f"min_read_quality: {min_read_quality}")
     print(f"batch_size: {batch_size}")
     print(f"emb_dim: {emb_dim}")
@@ -169,8 +175,8 @@ if __name__ == '__main__':
     print(f"corruption_rate: {corruption_rate}")
     print(f"proportion_random: {proportion_random}")
     print(f"main_lr: {main_lr}")
-    print(f"hyena: {hyena}")
-    if hyena:
+    print(f"readformer: {readformer}")
+    if readformer:
         print(f"kernel_size: {kernel_size}")
     print(f"corruption_scale: {args.corruption_scale}")
     print(f"name: {args.name}")
@@ -181,6 +187,7 @@ if __name__ == '__main__':
             api_key = f.read().strip()
         os.environ["WANDB_API_KEY"] = api_key
         wandb.login(key=api_key)
+        print("Logged in to wandb.")
     # # For local machine.
     # device = torch.device("mps") if torch.backends.mps.is_available() \
     #     else torch.device("cpu")
@@ -194,6 +201,10 @@ if __name__ == '__main__':
 
     if args.wandb:
         wandb.init(project=f"mlm-pretraining-{args.name}", config={
+            "layers": num_layers,
+            "heads": num_heads,
+            "n_order": n_order,
+            "kernel_size": kernel_size,
             "batch_size": batch_size,
             "emb_dim": emb_dim,
             "max_sequence_length": max_sequence_length,
@@ -225,8 +236,8 @@ if __name__ == '__main__':
     ).apply(init_weights).to(device)
 
     readformer = Model(
-        emb_dim=emb_dim, heads=num_heads, num_layers=num_layers, hyena=hyena,
-        kernel_size=kernel_size
+        emb_dim=emb_dim, heads=num_heads, num_layers=num_layers,
+        readformer=readformer, kernel_size=kernel_size
     ).apply(init_weights).to(device)
 
     # Set the scaling vectors to one and freeze them.

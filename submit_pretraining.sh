@@ -1,6 +1,6 @@
 #!/bin/bash
 
-BASENAME="45m_test_hyena_128d_2g_2l"
+BASENAME="45min_test_readformer_128d_2g_2l"
 
 LOG_DIR="logs/pretrain"
 
@@ -15,7 +15,7 @@ MODEL_DIR="/lustre/scratch126/casm/team274sb/lp23/readformer/models"
 GPU_MEMORY=40960
 MEMORY=16384
 CORES=4
-NUM_HEADS=4
+NUM_ORDER=4
 NUM_LAYERS=4
 MIN_READ_QUALITY=20
 BATCH_SIZE=64
@@ -63,12 +63,12 @@ singularity exec --nv \
   --pwd /scripts/readformer \
   ${SIF} \
   python3 /scripts/readformer/mlm_pretraining.py \
-    --hyena \
+    --readformer \
     --metadata_path /data/pretrain_metadata.csv \
     --data_dir /data/pretrain/BAM \
     --wandb_api_path /home/wandb_api_key \
     --model_dir /models \
-    --num_heads ${NUM_HEADS} \
+    --n_order ${NUM_ORDER} \
     --num_layers ${NUM_LAYERS} \
     --min_read_quality ${MIN_READ_QUALITY} \
     --batch_size ${BATCH_SIZE} \

@@ -95,27 +95,27 @@ class Model(nn.Module):
 
 # test
 
-import torch
-
-emb_dim = 16
-n_order = 2
-kernel_size = 3
-seq_length = 10
-batch_size = 2
-
-inputs = torch.randn(batch_size, seq_length, emb_dim)
-
-positions = torch.tensor([
-    [0, 1, 2, 3, 1, 2, 3, 4, 5, 6],
-    [1, 2, 3, 1, 2, 3, 4, 5, -1, -1]
-])
-
-# Mask the inputs with 0s where the positions are -1
-inputs = inputs * (positions != -1).unsqueeze(-1).to(torch.float32)
-
-readformer = Model(
-    emb_dim, num_layers=2, readformer=True, kernel_size=3, heads=8,
-    n_order=4
-)
-
-output = readformer(inputs, positions)
+# import torch
+#
+# emb_dim = 16
+# n_order = 2
+# kernel_size = 3
+# seq_length = 10
+# batch_size = 2
+#
+# inputs = torch.randn(batch_size, seq_length, emb_dim)
+#
+# positions = torch.tensor([
+#     [0, 1, 2, 3, 1, 2, 3, 4, 5, 6],
+#     [1, 2, 3, 1, 2, 3, 4, 5, -1, -1]
+# ])
+#
+# # Mask the inputs with 0s where the positions are -1
+# inputs = inputs * (positions != -1).unsqueeze(-1).to(torch.float32)
+#
+# readformer = Model(
+#     emb_dim, num_layers=2, readformer=True, kernel_size=3, heads=8,
+#     n_order=4
+# )
+#
+# output = readformer(inputs, positions)
