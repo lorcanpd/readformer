@@ -115,7 +115,7 @@ class Model(nn.Module):
 #
 # readformer = Model(
 #     emb_dim, num_layers=2, readformer=True, kernel_size=3, heads=8,
-#     n_order=4
+#     n_order=8
 # )
 #
 # output = readformer(inputs, positions)

@@ -99,6 +99,8 @@ class FeedForward(nn.Module):
             self.activation = F.elu
         elif activation == 'leaky_relu':
             self.activation = F.leaky_relu
+        elif activation == 'sine':
+            self.activation = torch.sin
         else:
             raise ValueError(f"Unsupported activation function: {activation}")
 
@@ -135,6 +137,7 @@ class FeedForward(nn.Module):
         return x
 
 
+
 class HyenaFilter(nn.Module):
     """
     Learns filters based on positionally transformed embeddings.
@@ -147,8 +150,14 @@ class HyenaFilter(nn.Module):
         super(HyenaFilter, self).__init__()
         self.emb_dim = emb_dim
         self.n_order = n_order
-        self.ffn = FeedForward(emb_dim, n_order=n_order)
+        self.ffn = FeedForward(emb_dim, n_order=n_order, activation='sine')
         self.epsilon = 1e-8  # Small value to avoid division by zero
+
+        # Initialise the Gaussian window parameters
+        self.mu = nn.Parameter(torch.rand(n_order, 1, 1))
+        self.sigma = nn.Parameter(
+            torch.full((n_order, 1, 1), 10.0)
+        )
 
     def forward(self, positional_encodings):
         """
@@ -170,6 +179,18 @@ class HyenaFilter(nn.Module):
         h_hat = h_hat.permute(0, 2, 3, 1)
         # Normalize h_hat along the channel dimension D
         h_hat = h_hat / (h_hat.norm(p=1, dim=-2, keepdim=True) + self.epsilon)
+
+        # Apply each orders' Gaussian window to their respective filters
+        seq_length = h_hat.size(-1)
+        position = torch.arange(
+            seq_length, device=h_hat.device
+        ).float().view(1, 1, 1, -1)
+        gaussian_windows = torch.exp(
+            -0.5 * ((position - self.mu * seq_length) / self.sigma) ** 2
+        ).to(h_hat.device)
+        # Bias prevents zero values outside the window.
+        h_hat = h_hat * (gaussian_windows + 0.01)
+
         # Split h_hat into h1, h2, ..., hN
         filters = h_hat.unbind(dim=-3)
 

@@ -311,8 +311,12 @@ if __name__ == '__main__':
             print("No checkpoint found. Training from scratch.")
             epoch = 0
 
+    print(f"Number of intervals: {len(intervals)}")
+    print(f"Number of data loaders: {len(data_loaders)}")
+
     # Iterate through data
     for batch in data_loaders[j]:
+        print(f"Processing batch {i} of data loader {j}")
 
         nucleotide_sequences = batch['nucleotide_sequences'].to(device)
         valid_mask = nucleotide_sequences != nucleotide_embeddings.padding_idx
