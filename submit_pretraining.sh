@@ -1,6 +1,6 @@
 #!/bin/bash
 
-BASENAME="6hour_test_readformer_128d_4g_4l"
+BASENAME="1hour_test_readformer_128d_8g_4l"
 
 LOG_DIR="logs/pretrain"
 
@@ -15,7 +15,7 @@ MODEL_DIR="/lustre/scratch126/casm/team274sb/lp23/readformer/models"
 GPU_MEMORY=40960
 MEMORY=16384
 CORES=4
-NUM_ORDER=4
+NUM_ORDER=8
 NUM_LAYERS=4
 MIN_READ_QUALITY=20
 BATCH_SIZE=64
@@ -50,7 +50,7 @@ for scale in "${SCALES[@]}"; do
 #BSUB -n ${CORES}
 #BSUB -gpu "mode=shared:num=1:gmem=${GPU_MEMORY}"
 #BSUB -R "select[mem>${MEMORY}] rusage[mem=${MEMORY}] span[hosts=1]"
-#BSUB -W 6:00
+#BSUB -W 1:00
 
 module load cellgen/singularity
 

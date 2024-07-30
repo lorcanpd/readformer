@@ -173,7 +173,7 @@ class RotaryHyenaFilter(nn.Module):
             adjusted_positions, self.emb_dim, self.theta_vector
         )
         t = apply_dimensionwise_rotation(embeddings, rotation_matrices)
-        filters = self.filter_generator(t)
+        filters = self.filter_generator(t, adjusted_positions)
 
         return filters
 

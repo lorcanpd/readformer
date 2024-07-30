@@ -146,20 +146,20 @@ class HyenaFilter(nn.Module):
     :param n_order: Number of orders for the filter.
     """
 
-    def __init__(self, emb_dim, n_order):
+    def __init__(self, emb_dim, n_order, max_seq_length=8192):
         super(HyenaFilter, self).__init__()
         self.emb_dim = emb_dim
         self.n_order = n_order
         self.ffn = FeedForward(emb_dim, n_order=n_order, activation='sine')
         self.epsilon = 1e-8  # Small value to avoid division by zero
-
+        self.seq_length = max_seq_length
         # Initialise the Gaussian window parameters
         self.mu = nn.Parameter(torch.rand(n_order, 1, 1))
         self.sigma = nn.Parameter(
-            torch.full((n_order, 1, 1), 10.0)
+            torch.full((n_order, 1, 1), 100.0)
         )
 
-    def forward(self, positional_encodings):
+    def forward(self, positional_encodings, positions=None):
         """
         Perform the forward pass to compute the filters.
 
@@ -180,15 +180,23 @@ class HyenaFilter(nn.Module):
         # Normalize h_hat along the channel dimension D
         h_hat = h_hat / (h_hat.norm(p=1, dim=-2, keepdim=True) + self.epsilon)
 
-        # Apply each orders' Gaussian window to their respective filters
-        seq_length = h_hat.size(-1)
-        position = torch.arange(
-            seq_length, device=h_hat.device
-        ).float().view(1, 1, 1, -1)
+        # # Apply each orders' Gaussian window to their respective filters
+        # seq_length = h_hat.size(-1)
+
+        if positions is None:
+            positions = torch.arange(
+                self.seq_length, device=h_hat.device
+            ).float().view(1, 1, 1, -1)
+
         gaussian_windows = torch.exp(
-            -0.5 * ((position - self.mu * seq_length) / self.sigma) ** 2
-        ).to(h_hat.device)
+            -0.5 * (
+                    (
+                            positions.unsqueeze(0).unsqueeze(0) -
+                            self.mu * self.seq_length
+                    ).permute(2, 1, 0, 3) / self.sigma
+            ) ** 2).to(h_hat.device)
         # Bias prevents zero values outside the window.
+
         h_hat = h_hat * (gaussian_windows + 0.01)
 
         # Split h_hat into h1, h2, ..., hN
