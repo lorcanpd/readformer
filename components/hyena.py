@@ -38,8 +38,8 @@ class HyenaProjection(nn.Module):
             List of n_order projected tensors, each of shape (batch_size,
             emb_dim, seq_length).
         """
-        device = inputs.device
-        self.W = self.W.to(device)
+        # device = inputs.device
+        # self.W = self.W.to(device)
         x = inputs
         x = torch.matmul(x, self.W)
         z = self.conv(x.transpose(1,2))
@@ -122,12 +122,12 @@ class FeedForward(nn.Module):
         :return:
             Output tensor after applying the feed-forward layer.
         """
-        device = inputs.device
-        self.W1 = self.W1.to(device)
-        self.b1 = self.b1.to(device)
-        self.W2 = self.W2.to(device)
-        self.b2 = self.b2.to(device)
-        self.ff_scale = self.ff_scale.to(device)
+        # device = inputs.device
+        # self.W1 = self.W1.to(device)
+        # self.b1 = self.b1.to(device)
+        # self.W2 = self.W2.to(device)
+        # self.b2 = self.b2.to(device)
+        # self.ff_scale = self.ff_scale.to(device)
 
         x = torch.matmul(inputs, self.W1) + self.b1
         x = self.layer_norm(x)
@@ -135,7 +135,6 @@ class FeedForward(nn.Module):
         x = torch.matmul(x, self.W2) + self.b2
         x = x * self.ff_scale
         return x
-
 
 
 class HyenaFilter(nn.Module):
@@ -146,20 +145,20 @@ class HyenaFilter(nn.Module):
     :param n_order: Number of orders for the filter.
     """
 
-    def __init__(self, emb_dim, n_order, max_seq_length=8192):
+    def __init__(self, emb_dim, n_order):#, max_seq_length=8192):
         super(HyenaFilter, self).__init__()
         self.emb_dim = emb_dim
         self.n_order = n_order
         self.ffn = FeedForward(emb_dim, n_order=n_order, activation='sine')
         self.epsilon = 1e-8  # Small value to avoid division by zero
-        self.seq_length = max_seq_length
+        # self.seq_length = max_seq_length
         # Initialise the Gaussian window parameters
         self.mu = nn.Parameter(torch.rand(n_order, 1, 1))
         self.sigma = nn.Parameter(
-            torch.full((n_order, 1, 1), 100.0)
+            torch.full((n_order, 1, 1), 10.0)
         )
 
-    def forward(self, positional_encodings, positions=None):
+    def forward(self, positional_encodings):#, positions=None):
         """
         Perform the forward pass to compute the filters.
 
@@ -181,20 +180,27 @@ class HyenaFilter(nn.Module):
         h_hat = h_hat / (h_hat.norm(p=1, dim=-2, keepdim=True) + self.epsilon)
 
         # # Apply each orders' Gaussian window to their respective filters
-        # seq_length = h_hat.size(-1)
+        seq_length = h_hat.size(-1)
 
-        if positions is None:
-            positions = torch.arange(
-                self.seq_length, device=h_hat.device
-            ).float().view(1, 1, 1, -1)
+        # if positions is None:
+        # positions = torch.arange(
+        #     # self.seq_length, device=h_hat.device
+        #     seq_length
+        # ).float().view(1, 1, 1, -1)
+        positions = torch.arange(
+            seq_length
+        ).float().view(1, 1, -1)
 
+        # gaussian_windows = torch.exp(
+        #     -0.5 * (
+        #             (
+        #                     positions - self.mu * seq_length
+        #             ).permute(2, 1, 0, 3) / self.sigma
+        #     ) ** 2)#.to(h_hat.device)
         gaussian_windows = torch.exp(
             -0.5 * (
-                    (
-                            positions.unsqueeze(0).unsqueeze(0) -
-                            self.mu * self.seq_length
-                    ).permute(2, 1, 0, 3) / self.sigma
-            ) ** 2).to(h_hat.device)
+                    (positions - self.mu * seq_length) / self.sigma
+            ) ** 2)
         # Bias prevents zero values outside the window.
 
         h_hat = h_hat * (gaussian_windows + 0.01)

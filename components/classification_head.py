@@ -19,10 +19,10 @@ def spectral_norm(weight, n_power_iterations=1):
 
     u = nn.Parameter(
         torch.randn(weight_mat.size(0), 1), requires_grad=False
-    ).to(weight.device)
+    )#.to(weight.device)
     v = nn.Parameter(
         torch.randn(weight_mat.size(1), 1), requires_grad=False
-    ).to(weight.device)
+    )#.to(weight.device)
 
     for _ in range(n_power_iterations):
         v = torch.matmul(weight_mat.t(), u)
@@ -196,7 +196,7 @@ class AdversarialLayer(nn.Module):
         # nucleotide_probs = self.softmax(nucleotide_logits)
 
         num_replaced = x.shape[0]
-        mask = torch.zeros((num_replaced, self.num_nucleotides)).to(x.device)
+        mask = torch.zeros((num_replaced, self.num_nucleotides))#.to(x.device)
         valid_indices = (
                 original_nucleotide_indices < self.num_nucleotides
         ).nonzero(as_tuple=True)[0]

@@ -36,15 +36,15 @@ def compute_rotation_angles(loci_positions, d_model, theta_vector):
         A tensor of shape [batch_size, seq_len, d_model//2, 2, 2] containing
         rotation matrices for each dimension of the embedding vectors.
     """
-    if loci_positions.device != theta_vector.device:
-        if loci_positions.device.type == 'cuda':
-            theta_vector = theta_vector.to(loci_positions.device)
-        elif theta_vector.device.type == 'cuda':
-            loci_positions = loci_positions.to(theta_vector.device)
-        else:
-            raise ValueError(
-                "Incompatible devices for loci_positions and theta_vector"
-            )
+    # if loci_positions.device != theta_vector.device:
+    #     if loci_positions.device.type == 'cuda':
+    #         theta_vector = theta_vector.to(loci_positions.device)
+    #     elif theta_vector.device.type == 'cuda':
+    #         loci_positions = loci_positions.to(theta_vector.device)
+    #     else:
+    #         raise ValueError(
+    #             "Incompatible devices for loci_positions and theta_vector"
+    #         )
 
     batch_size, seq_len = loci_positions.shape
 
