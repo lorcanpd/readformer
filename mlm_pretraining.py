@@ -286,7 +286,6 @@ if __name__ == '__main__':
     else:
         corruption_rates = [0.2] * len(intervals)
 
-    data_loaders = []
 
     i = 0
     j = 0
@@ -305,9 +304,10 @@ if __name__ == '__main__':
             epoch = 0
 
     print(f"Number of intervals: {len(intervals)}")
-    print(f"Number of data loaders: {len(data_loaders)}")
+    # print(f"Number of data loaders: {len(data_loaders)}")
 
     for interval in intervals:
+        print(f"Training for interval {interval}")
         data_loader = create_data_loader(
             file_paths=data_dir,
             metadata_path=metadata_path,
@@ -319,7 +319,6 @@ if __name__ == '__main__':
             num_workers=4,
             prefetch_factor=2
         )
-        data_loaders.append(data_loader)
         # Iterate through data
         for batch in data_loader:
             print(f"Processing batch {i} of data loader {j}")
