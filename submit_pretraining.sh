@@ -48,7 +48,7 @@ for scale in "${SCALES[@]}"; do
 #BSUB -e ${LOG_DIR}/${NAME}_%J.err
 #BSUB -M ${MEMORY}
 #BSUB -n ${CORES}
-#BSUB -gpu "mode=shared:num=1:gmem=${GPU_MEMORY}"
+#BSUB -gpu "num=1:mode=exclusive_process:j_exclusive=yes"
 #BSUB -R "select[mem>${MEMORY}] rusage[mem=${MEMORY}] span[hosts=1]"
 #BSUB -W 1:00
 
