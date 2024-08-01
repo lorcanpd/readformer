@@ -145,10 +145,11 @@ class HyenaFilter(nn.Module):
     :param n_order: Number of orders for the filter.
     """
 
-    def __init__(self, emb_dim, n_order):#, max_seq_length=8192):
+    def __init__(self, emb_dim, n_order, max_seq_length=256):
         super(HyenaFilter, self).__init__()
         self.emb_dim = emb_dim
         self.n_order = n_order
+        self.max_seq_length = max_seq_length
         self.ffn = FeedForward(emb_dim, n_order=n_order, activation='sine')
         self.epsilon = 1e-8  # Small value to avoid division by zero
         # self.seq_length = max_seq_length
@@ -179,7 +180,7 @@ class HyenaFilter(nn.Module):
         # Normalize h_hat along the channel dimension D
         h_hat = h_hat / (h_hat.norm(p=1, dim=-2, keepdim=True) + self.epsilon)
 
-        # # Apply each orders' Gaussian window to their respective filters
+        # # # Apply each orders' Gaussian window to their respective filters
         seq_length = h_hat.size(-1)
 
         # if positions is None:
@@ -199,7 +200,7 @@ class HyenaFilter(nn.Module):
         #     ) ** 2)#.to(h_hat.device)
         gaussian_windows = torch.exp(
             -0.5 * (
-                    (positions - self.mu * seq_length) / self.sigma
+                    (positions - self.mu * self.max_seq_length) / self.sigma
             ) ** 2)
         # Bias prevents zero values outside the window.
 

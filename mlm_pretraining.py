@@ -304,7 +304,6 @@ if __name__ == '__main__':
             epoch = 0
 
     print(f"Number of intervals: {len(intervals)}")
-    # print(f"Number of data loaders: {len(data_loaders)}")
 
     for interval in intervals:
         print(f"Training for interval {interval}")
@@ -316,7 +315,7 @@ if __name__ == '__main__':
             batch_size=batch_size,
             min_quality=min_read_quality,
             shuffle=True,
-            num_workers=4,
+            num_workers=2,
             prefetch_factor=2
         )
         # Iterate through data
