@@ -61,6 +61,8 @@ singularity exec --nv \
   --bind ${MODEL_DIR}:/models \
   --bind ${WANDB_API_KEY_PATH}:/home/wandb_api_key \
   --pwd /scripts/readformer \
+  --env OMP_NUM_THREADS=1 \
+  --env MKL_NUM_THREADS=1 \
   ${SIF} \
   python3 /scripts/readformer/mlm_pretraining.py \
     --readformer \

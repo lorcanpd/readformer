@@ -315,8 +315,8 @@ if __name__ == '__main__':
             batch_size=batch_size,
             min_quality=min_read_quality,
             shuffle=True,
-            num_workers=2,
-            prefetch_factor=2
+            num_workers=4,
+            prefetch_factor=1
         )
         # Iterate through data
         for batch in data_loader:
