@@ -3,7 +3,7 @@ import os
 # import random
 import pandas as pd
 import torch
-from torch.utils.data import Dataset, DataLoader, Sampler
+from torch.utils.data import Dataset, DataLoader, Sampler, get_worker_info
 from components.extract_reads import (
     extract_reads_from_position_onward, sample_positions, get_read_info
 )
@@ -162,6 +162,14 @@ class InfiniteSampler(Sampler):
             idx += 1
 
 
+def worker_init_fn(worker_id):
+    worker_info = get_worker_info()
+    if worker_info is not None:
+        print(f"Initializing worker {worker_info.id}/{worker_info.num_workers}")
+    else:
+        print("Initializing main process")
+
+
 def create_data_loader(
         file_paths, metadata_path, nucleotide_threshold, max_sequence_length,
         batch_size, min_quality, shuffle=True, num_workers=4, prefetch_factor=2
@@ -191,7 +199,8 @@ def create_data_loader(
     sampler = InfiniteSampler(dataset, shuffle)
     return DataLoader(
         dataset, batch_size=batch_size, collate_fn=collate_fn, sampler=sampler,
-        num_workers=num_workers, prefetch_factor=prefetch_factor, pin_memory=True
+        num_workers=num_workers, prefetch_factor=prefetch_factor,
+        pin_memory=True, worker_init_fn=worker_init_fn
     )
 
 
@@ -318,4 +327,9 @@ def collate_fn(batch):
     #
     # batched_data.pin_memory = lambda: pin_memory(batched_data)
 
-    return CustomBatch(batched_data)
+    batch = CustomBatch(batched_data)
+
+    if torch.cuda.is_available():
+        batch = batch.pin_memory()
+
+    return batch
