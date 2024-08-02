@@ -65,6 +65,7 @@ singularity exec --nv \
   --env MKL_NUM_THREADS=1 \
   --env INTRA_OP_PARALLELISM_THREADS=1 \
   --env INTER_OP_PARALLELISM_THREADS=1 \
+  --env CUDA_LAUNCH_BLOCKING=1 \
   ${SIF} \
   python3 /scripts/readformer/mlm_pretraining.py \
     --readformer \
