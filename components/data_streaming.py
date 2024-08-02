@@ -7,7 +7,10 @@ from torch.utils.data import Dataset, DataLoader, Sampler, get_worker_info
 from components.extract_reads import (
     extract_reads_from_position_onward, sample_positions, get_read_info
 )
+import multiprocessing as mp
 
+if torch.cuda.is_available():
+    mp.set_start_method('spawn', force=True)
 
 def replicate_binary_flag_vector_list(
         binary_flag_vector, sequence_length
@@ -200,10 +203,17 @@ def create_data_loader(
         min_quality=min_quality
     )
     sampler = InfiniteSampler(dataset, shuffle)
+
+    if torch.cuda.is_available():
+        multiprocessing_context = mp.get_context('spawn')
+    else:
+        multiprocessing_context = None
+
     return DataLoader(
         dataset, batch_size=batch_size, collate_fn=collate_fn, sampler=sampler,
         num_workers=num_workers, prefetch_factor=prefetch_factor,
-        pin_memory=True, worker_init_fn=worker_init_fn
+        pin_memory=True, worker_init_fn=worker_init_fn,
+        multiprocessing_context=multiprocessing_context
     )
 
 
