@@ -168,6 +168,9 @@ def worker_init_fn(worker_id):
         print(f"Initializing worker {worker_info.id}/{worker_info.num_workers}")
     else:
         print("Initializing main process")
+    # Ensure CUDA is initialized in each worker
+    if torch.cuda.is_available():
+        torch.cuda.init()
 
 
 def create_data_loader(
