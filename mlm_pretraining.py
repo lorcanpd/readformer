@@ -22,6 +22,7 @@ import wandb
 import argparse
 import os
 from contextlib import contextmanager
+import multiprocessing as mp
 
 
 def check_cuda_availability():
@@ -539,7 +540,7 @@ def main():
 
 if __name__ == '__main__':
     if not check_cuda_availability():
-        print("CUDA is not available.")
+        pass
     else:
-        print("CUDA is available.")
+        mp.set_start_method('spawn', force=True)
     main()
