@@ -141,7 +141,10 @@ class BAMReadDataset(Dataset):
         bitwise_flags += [[0.0]*12] * (padding_length)
         positions += [-1] * (padding_length)
 
-        print(f"nucleotide_sequences: {nucleotide_sequences}")
+        print(
+            f"Line before returning batch, "
+            f"number of nucleotide sequences: {len(nucleotide_sequences)}"
+        )
         return {
             'nucleotide_sequences': nucleotide_sequences,
             'base_qualities': base_qualities,
