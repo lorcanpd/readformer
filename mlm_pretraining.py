@@ -127,6 +127,16 @@ def load_checkpoint(
         return None, None
 
 
+def batches_are_identical(batch1, batch2):
+    if batch1 is None or batch2 is None:
+        return False
+    if len(batch1) != len(batch2):
+        return False
+    for key in batch1:
+        if not torch.equal(batch1[key], batch2[key]):
+            return False
+    return True
+
 @contextmanager
 def device_context(device):
     if device.type == 'cuda':
@@ -136,8 +146,7 @@ def device_context(device):
         yield
 
 
-if __name__ == '__main__':
-
+def main():
     args = get_args()
 
     if not os.path.exists(args.model_dir):
@@ -320,6 +329,13 @@ if __name__ == '__main__':
         )
         # Iterate through data
         for batch in data_loader:
+            # if i > 0:
+            #     # assert that the batch is different from the previous one
+            #     if batches_are_identical(old_batch, batch):
+            #         print("Batches are identical!")
+            #         break
+            #
+            # old_batch = batch
             print(f"Processing batch {i} of data loader {j}")
 
             with device_context(device):
@@ -491,3 +507,7 @@ if __name__ == '__main__':
 
     if args.wandb:
         wandb.finish()
+
+
+if __name__ == '__main__':
+    main()

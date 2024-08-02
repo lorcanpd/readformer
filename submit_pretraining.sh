@@ -63,6 +63,8 @@ singularity exec --nv \
   --pwd /scripts/readformer \
   --env OMP_NUM_THREADS=1 \
   --env MKL_NUM_THREADS=1 \
+  --env INTRA_OP_PARALLELISM_THREADS=1 \
+  --env INTER_OP_PARALLELISM_THREADS=1 \
   ${SIF} \
   python3 /scripts/readformer/mlm_pretraining.py \
     --readformer \

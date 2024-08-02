@@ -191,7 +191,7 @@ def create_data_loader(
     sampler = InfiniteSampler(dataset, shuffle)
     return DataLoader(
         dataset, batch_size=batch_size, collate_fn=collate_fn, sampler=sampler,
-        num_workers=num_workers, prefetch_factor=prefetch_factor
+        num_workers=num_workers, prefetch_factor=prefetch_factor, pin_memory=True
     )
 
 
