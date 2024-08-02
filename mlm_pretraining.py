@@ -335,7 +335,6 @@ if __name__ == '__main__':
                 cigar_insertion = batch['cigar_insertion']  # .to(device)
                 bitwise_flags = batch['bitwise_flags']  # .to(device)
                 positions = batch['positions']  # .to(device)
-
                 # Identify the positions to corrupt
                 all_replaced = get_replacement_mask(
                     positions, rate=corruption_rates[j]
