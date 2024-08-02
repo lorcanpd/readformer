@@ -24,6 +24,33 @@ import os
 from contextlib import contextmanager
 
 
+def check_cuda_availability():
+    if not torch.cuda.is_available():
+        print("CUDA is not available.")
+        return False
+
+    num_devices = torch.cuda.device_count()
+    print(f"Number of CUDA devices available: {num_devices}")
+
+    for device_id in range(num_devices):
+        device = torch.device(f"cuda:{device_id}")
+        properties = torch.cuda.get_device_properties(device)
+        print(f"Device {device_id}: {properties.name}")
+        print(f"  Total memory: {properties.total_memory / 1e9} GB")
+        print(f"  Multiprocessors: {properties.multi_processor_count}")
+        print(f"  Compute Capability: {properties.major}.{properties.minor}")
+
+        # Try to allocate a small tensor on the device to check if it is free
+        try:
+            torch.tensor([1.0], device=device)
+            print(f"Device {device_id} is available and functional.")
+        except RuntimeError as e:
+            print(f"Device {device_id} is not available: {e}")
+            return False
+
+    return True
+
+
 def get_args():
     parser = argparse.ArgumentParser(
         description="Set parameters for the model and data loading."
@@ -511,4 +538,8 @@ def main():
 
 
 if __name__ == '__main__':
+    if not check_cuda_availability():
+        print("CUDA is not available.")
+    else:
+        print("CUDA is available.")
     main()
