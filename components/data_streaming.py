@@ -212,7 +212,7 @@ def create_data_loader(
     return DataLoader(
         dataset, batch_size=batch_size, collate_fn=collate_fn, sampler=sampler,
         num_workers=num_workers, prefetch_factor=prefetch_factor,
-        pin_memory=True, worker_init_fn=worker_init_fn,
+        pin_memory=False, worker_init_fn=worker_init_fn,
         multiprocessing_context=multiprocessing_context
     )
 
@@ -342,7 +342,7 @@ def collate_fn(batch):
 
     batch = CustomBatch(batched_data)
 
-    if torch.cuda.is_available():
-        batch = batch.pin_memory()
+    # if torch.cuda.is_available():
+    #     batch = batch.pin_memory()
 
     return batch
