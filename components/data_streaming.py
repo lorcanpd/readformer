@@ -213,6 +213,45 @@ def encode_nucleotides(sequence):
     # Handle case where base is not in the lookup table
     return [nucleotide_to_index.get(nuc, 15) for nuc in sequence]
 
+#
+# def collate_fn(batch):
+#     """
+#     Collate function to process and batch the data samples.
+#
+#     :param batch:
+#         A list of dictionaries where each dictionary represents a data sample.
+#     :returns:
+#         A dictionary of batched tensors, or None if the batch is empty after
+#         filtering.
+#     """
+#     # Filter out None samples
+#     batch = [x for x in batch if x is not None]
+#
+#     # Handle edge case where batch might be empty after filtering
+#     if not batch:
+#         return None
+#
+#     # Creating batch tensors for each key in the dictionary
+#     batched_data = {}
+#
+#     # Iterate over the keys in a sample's dictionary
+#     for key in batch[0]:
+#         if key == 'nucleotide_sequences':
+#             # Encode nucleotide sequences and convert them to tensor
+#             encoded_sequences = [encode_nucleotides(b[key]) for b in batch]
+#             batched_data[key] = torch.tensor(
+#                 encoded_sequences, dtype=torch.int32
+#             )
+#         else:
+#             # Assume other keys are already appropriate for conversion to tensor
+#             batched_data[key] = torch.tensor(
+#                 [b[key] for b in batch],
+#                 dtype=torch.float32 if isinstance(batch[0][key][0], float)
+#                 else torch.int32
+#             )
+#
+#     return batched_data
+
 
 def collate_fn(batch):
     """
@@ -250,5 +289,13 @@ def collate_fn(batch):
                 else torch.int32
             )
 
-    return batched_data
+    # Add pin_memory method to batched_data
+    def pin_memory(batched_data):
+        for key in batched_data:
+            if isinstance(batched_data[key], torch.Tensor):
+                batched_data[key] = batched_data[key].pin_memory()
+        return batched_data
 
+    batched_data.pin_memory = lambda: pin_memory(batched_data)
+
+    return batched_data
