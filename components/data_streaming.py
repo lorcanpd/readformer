@@ -253,6 +253,26 @@ def encode_nucleotides(sequence):
 #     return batched_data
 
 
+class CustomBatch:
+    def __init__(self, batch_data):
+        self.batch_data = batch_data
+
+    def pin_memory(self):
+        for key in self.batch_data:
+            if isinstance(self.batch_data[key], torch.Tensor):
+                self.batch_data[key] = self.batch_data[key].pin_memory()
+        return self
+
+    def __getitem__(self, item):
+        return self.batch_data[item]
+
+    def keys(self):
+        return self.batch_data.keys()
+
+    def items(self):
+        return self.batch_data.items()
+
+
 def collate_fn(batch):
     """
     Collate function to process and batch the data samples.
@@ -289,13 +309,13 @@ def collate_fn(batch):
                 else torch.int32
             )
 
-    # Add pin_memory method to batched_data
-    def pin_memory(batched_data):
-        for key in batched_data:
-            if isinstance(batched_data[key], torch.Tensor):
-                batched_data[key] = batched_data[key].pin_memory()
-        return batched_data
+    # # Add pin_memory method to batched_data
+    # def pin_memory(batched_data):
+    #     for key in batched_data:
+    #         if isinstance(batched_data[key], torch.Tensor):
+    #             batched_data[key] = batched_data[key].pin_memory()
+    #     return batched_data
+    #
+    # batched_data.pin_memory = lambda: pin_memory(batched_data)
 
-    batched_data.pin_memory = lambda: pin_memory(batched_data)
-
-    return batched_data
+    return CustomBatch(batched_data)
