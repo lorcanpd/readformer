@@ -25,8 +25,6 @@ from contextlib import contextmanager
 import multiprocessing as mp
 import logging
 
-logging.basicConfig(level=logging.DEBUG)
-
 
 def get_allocated_cpus():
     cpus = int(os.getenv('LSB_DJOB_NUMPROC', '1'))
@@ -36,26 +34,26 @@ def get_allocated_cpus():
 
 def check_cuda_availability():
     if not torch.cuda.is_available():
-        print("CUDA is not available.")
+        logging.info("CUDA is not available.")
         return False
 
     num_devices = torch.cuda.device_count()
-    print(f"Number of CUDA devices available: {num_devices}")
+    logging.info(f"Number of CUDA devices available: {num_devices}")
 
     for device_id in range(num_devices):
         device = torch.device(f"cuda:{device_id}")
         properties = torch.cuda.get_device_properties(device)
-        print(f"Device {device_id}: {properties.name}")
-        print(f"  Total memory: {properties.total_memory / 1e9} GB")
-        print(f"  Multiprocessors: {properties.multi_processor_count}")
-        print(f"  Compute Capability: {properties.major}.{properties.minor}")
+        logging.info(f"Device {device_id}: {properties.name}")
+        logging.info(f"  Total memory: {properties.total_memory / 1e9} GB")
+        logging.info(f"  Multiprocessors: {properties.multi_processor_count}")
+        logging.info(f"  Compute Capability: {properties.major}.{properties.minor}")
 
         # Try to allocate a small tensor on the device to check if it is free
         try:
             torch.tensor([1.0], device=device)
-            print(f"Device {device_id} is available and functional.")
+            logging.info(f"Device {device_id} is available and functional.")
         except RuntimeError as e:
-            print(f"Device {device_id} is not available: {e}")
+            logging.error(f"Device {device_id} is not available: {e}")
             return False
 
     return True
@@ -135,6 +133,10 @@ def get_args():
         '--wandb_api_path', type=str, default='.wandb_api',
         help='Path to the wandb api key file.'
     )
+    parser.add_argument(
+        '--logging', type=str, default='INFO',
+        help='Logging level.'
+    )
 
     args = parser.parse_args()
     return args
@@ -157,10 +159,10 @@ def load_checkpoint(
         mean_loss = checkpoint['mean_loss']
         i = checkpoint['i']
         j = checkpoint['j']
-        print(f"Loaded checkpoint '{checkpoint_path}' (epoch {epoch}, mean loss {mean_loss})")
+        logging.info(f"Loaded checkpoint '{checkpoint_path}' (epoch {epoch}, mean loss {mean_loss})")
         return epoch, mean_loss, i, j
     else:
-        print(f"No checkpoint found at '{checkpoint_path}'")
+        logging.error(f"No checkpoint found at '{checkpoint_path}'")
         return None, None
 
 
@@ -209,29 +211,30 @@ def main():
     kernel_size = args.kernel_size
     checkpoint_path = f"{args.model_dir}/{args.name}_latest.pth"
     wand_api_path = args.wandb_api_path
+    logging.basicConfig(level=args.logging)
 
     # Print values to verify
-    print(f"metadata_path: {metadata_path}")
-    print(f"data_dir: {data_dir}")
-    print(f"num_heads: {num_heads}")
-    print(f"num_layers: {num_layers}")
-    print(f"n_order: {n_order}")
-    print(f"min_read_quality: {min_read_quality}")
-    print(f"batch_size: {batch_size}")
-    print(f"emb_dim: {emb_dim}")
-    print(f"max_sequence_length: {max_sequence_length}")
-    print(f"l1_lambda: {l1_lambda}")
-    print(f"warm_up_epochs: {warm_up_epochs}")
-    print(f"epochs_at_interval: {epochs_at_interval}")
-    print(f"iters_in_epoch: {iters_in_epoch}")
-    print(f"corruption_rate: {corruption_rate}")
-    print(f"proportion_random: {proportion_random}")
-    print(f"main_lr: {main_lr}")
-    print(f"readformer: {readformer}")
+    logging.info(f"metadata_path: {metadata_path}")
+    logging.info(f"data_dir: {data_dir}")
+    logging.info(f"num_heads: {num_heads}")
+    logging.info(f"num_layers: {num_layers}")
+    logging.info(f"n_order: {n_order}")
+    logging.info(f"min_read_quality: {min_read_quality}")
+    logging.info(f"batch_size: {batch_size}")
+    logging.info(f"emb_dim: {emb_dim}")
+    logging.info(f"max_sequence_length: {max_sequence_length}")
+    logging.info(f"l1_lambda: {l1_lambda}")
+    logging.info(f"warm_up_epochs: {warm_up_epochs}")
+    logging.info(f"epochs_at_interval: {epochs_at_interval}")
+    logging.info(f"iters_in_epoch: {iters_in_epoch}")
+    logging.info(f"corruption_rate: {corruption_rate}")
+    logging.info(f"proportion_random: {proportion_random}")
+    logging.info(f"main_lr: {main_lr}")
+    logging.info(f"readformer: {readformer}")
     if readformer:
-        print(f"kernel_size: {kernel_size}")
-    print(f"corruption_scale: {args.corruption_scale}")
-    print(f"name: {args.name}")
+        logging.info(f"kernel_size: {kernel_size}")
+    logging.info(f"corruption_scale: {args.corruption_scale}")
+    logging.info(f"name: {args.name}")
 
     if args.wandb:
         # load api key from file
@@ -239,7 +242,7 @@ def main():
             api_key = f.read().strip()
         os.environ["WANDB_API_KEY"] = api_key
         wandb.login(key=api_key)
-        print("Logged in to wandb.")
+        logging.info("Logged in to wandb.")
 
     device = (
         torch.device("mps") if torch.backends.mps.is_available() else
@@ -247,7 +250,7 @@ def main():
             "cuda" if torch.cuda.is_available() else "cpu"
         )
     )
-    print(f"Using device: {device}")
+    logging.info(f"Using device: {device}")
 
     # Enable anomaly detection
     torch.autograd.set_detect_anomaly(True)
@@ -346,13 +349,13 @@ def main():
             binary_metric_embeddings, optimiser
         )
         if epoch is None:
-            print("No checkpoint found. Training from scratch.")
+            logging.info("No checkpoint found. Training from scratch.")
             epoch = 0
 
-    print(f"Number of intervals: {len(intervals)}")
+    logging.info(f"Number of intervals: {len(intervals)}")
 
     for interval in intervals:
-        print(f"Training for interval {interval}")
+        logging.info(f"Training for interval {interval}")
         data_loader = create_data_loader(
             file_paths=data_dir,
             metadata_path=metadata_path,
@@ -364,12 +367,12 @@ def main():
             num_workers=get_allocated_cpus()-1,
             prefetch_factor=2
         )
-        print(f"Data loader created for interval {interval}")
+        logging.info(f"Data loader created for interval {interval}")
 
         # Iterate through data
         for batch in data_loader:
 
-            print(f"Processing batch {i} of data loader {j}")
+            logging.debug(f"Processing batch {i} of data loader {j}")
 
             with device_context(device):
 
@@ -480,7 +483,7 @@ def main():
                 loss.backward()
                 torch.nn.utils.clip_grad_norm_(readformer.parameters(), max_norm=1)
                 optimiser.step()
-                print(f"DEBUGGING - Loss at iteration {i}: {loss.item()}")
+                logging.debug(f"Loss at iteration {i}: {loss.item()}")
 
                 if args.wandb:
                     wandb.log(
@@ -527,7 +530,8 @@ def main():
                         if args.wandb:
                             wandb.save(checkpoint_path)
 
-                    print(
+
+                    logging.info(
                         f"Epoch {epoch}: , "
                         f"Mean Main Loss: {mean_loss} "
                     )

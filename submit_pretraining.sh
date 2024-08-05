@@ -1,6 +1,6 @@
 #!/bin/bash
 
-BASENAME="1hour_test_readformer_128d_4g_2l"
+
 
 LOG_DIR="logs/pretrain"
 
@@ -13,12 +13,12 @@ DATA_DIR="/lustre/scratch126/casm/team274sb/lp23/readformer/data/pretrain_bams"
 METADATA_PATH="/lustre/scratch126/casm/team274sb/lp23/readformer/data/one_sample_metadata.csv"
 MODEL_DIR="/lustre/scratch126/casm/team274sb/lp23/readformer/models"
 GPU_MEMORY=40960
-MEMORY=8192
+MEMORY=16384
 CORES=4
 NUM_ORDER=4
-NUM_LAYERS=2
+NUM_LAYERS=4
 MIN_READ_QUALITY=20
-BATCH_SIZE=16
+BATCH_SIZE=64
 EMB_DIM=128
 MAX_SEQUENCE_LENGTH=8192
 WARM_UP_EPOCHS=10
@@ -28,8 +28,11 @@ CORRUPTION_RATE="variable"
 PROPORTION_RANDOM=0.1
 MAIN_LR=1e-3
 
+
 CORRUPTION_SCALE=0.5
 NAME="TEST"
+
+BASENAME="1hour_test_readformer_bs${BATCH_SIZE}_${EMB_DIM}d_4${NUM_ORDER}_2${NUM_LAYERS}"
 
 #SCALES=( 0.5 0.75 0.9 )
 
@@ -83,7 +86,8 @@ singularity exec --nv \
     --proportion_random ${PROPORTION_RANDOM} \
     --main_lr ${MAIN_LR} \
     --corruption_scale ${CORRUPTION_SCALE} \
-    --name ${NAME}
+    --name ${NAME} \
+    --logging DEBUG
 
 EOF
   )

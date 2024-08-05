@@ -10,8 +10,6 @@ from components.extract_reads import (
 import multiprocessing as mp
 import logging
 
-logging.basicConfig(level=logging.DEBUG)
-
 
 def replicate_binary_flag_vector_list(
         binary_flag_vector, sequence_length
@@ -217,30 +215,30 @@ def create_data_loader(
     :return:
         DataLoader instance.
     """
-    print("Creating BAMReadDataset...")
+    logging.info("Creating BAMReadDataset...")
     dataset = BAMReadDataset(
         file_paths, metadata_path, nucleotide_threshold, max_sequence_length,
         min_quality=min_quality
     )
 
     if len(dataset) > 0:
-        print("Dataset created successfully")
+        logging.info("Dataset created successfully")
     else:
-        print("Dataset is empty")
+        logging.error("Dataset is empty")
         return None
 
-    print("Creating InfiniteSampler...")
+    logging.info("Creating InfiniteSampler...")
     sampler = InfiniteSampler(dataset, shuffle)
-    print("InfiniteSampler created successfully")
+    logging.info("InfiniteSampler created successfully")
 
     if torch.cuda.is_available() and num_workers is None:
         multiprocessing_context = mp.get_context('spawn')
-        print("Using multiprocessing context: 'spawn'")
+        logging.info("Using multiprocessing context: 'spawn'")
     else:
         multiprocessing_context = None
-        print("Multiprocessing context is None")
+        logging.info("Multiprocessing context is None")
 
-    print("Creating DataLoader...")
+    logging.info("Creating DataLoader...")
     data_loader = DataLoader(
         dataset, batch_size=batch_size, collate_fn=collate_fn, sampler=sampler,
         num_workers=num_workers, prefetch_factor=prefetch_factor,
@@ -250,7 +248,7 @@ def create_data_loader(
         persistent_workers=(multiprocessing_context is not None)
     )
 
-    print("DataLoader created successfully")
+    logging.info("DataLoader created successfully")
 
     return data_loader
 
