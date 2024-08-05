@@ -197,7 +197,7 @@ def worker_init_fn(worker_id):
 
 def create_data_loader(
         file_paths, metadata_path, nucleotide_threshold, max_sequence_length,
-        batch_size, min_quality, shuffle=True, num_workers=None, prefetch_factor=2
+        batch_size, min_quality, shuffle=True, num_workers=0, prefetch_factor=2
 ):
     """
     Create a DataLoader for batch processing of BAM file reads.
@@ -233,15 +233,7 @@ def create_data_loader(
     sampler = InfiniteSampler(dataset, shuffle)
     print("InfiniteSampler created successfully")
 
-    if num_workers is None:
-        worker_flag = False
-    else:
-        if num_workers > 0:
-            worker_flag = True
-        else:
-            worker_flag = False
-
-    if torch.cuda.is_available() and worker_flag:
+    if torch.cuda.is_available() and num_workers is None:
         multiprocessing_context = mp.get_context('spawn')
         print("Using multiprocessing context: 'spawn'")
     else:
