@@ -210,7 +210,7 @@ def create_data_loader(
     )
     sampler = InfiniteSampler(dataset, shuffle)
 
-    if torch.cuda.is_available():
+    if torch.cuda.is_available() and num_workers > 0:
         multiprocessing_context = mp.get_context('spawn')
     else:
         multiprocessing_context = None
