@@ -360,8 +360,8 @@ def main():
             max_sequence_length=max_sequence_length,
             batch_size=batch_size,
             min_quality=min_read_quality,
-            shuffle=True,
-            num_workers=get_allocated_cpus()-1
+            shuffle=True
+            # num_workers=get_allocated_cpus()-1
             # prefetch_factor=0
         )
         print(f"Data loader created for interval {interval}")
