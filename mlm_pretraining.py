@@ -21,6 +21,7 @@ from components.pretrain_utils import (
 import wandb
 import argparse
 import os
+import sys
 from contextlib import contextmanager
 import multiprocessing as mp
 import logging
@@ -211,7 +212,32 @@ def main():
     kernel_size = args.kernel_size
     checkpoint_path = f"{args.model_dir}/{args.name}_latest.pth"
     wand_api_path = args.wandb_api_path
-    logging.basicConfig(level=args.logging)
+
+    # Map the string logging level to the actual logging level
+    numeric_level = getattr(logging, args.logging.upper(), None)
+    if not isinstance(numeric_level, int):
+        raise ValueError(f'Invalid log level: {args.logging}')
+
+    # Create handlers
+    stdout_handler = logging.StreamHandler(sys.stdout)
+    stderr_handler = logging.StreamHandler(sys.stderr)
+
+    # Set levels for handlers
+    stdout_handler.setLevel(numeric_level)
+    stderr_handler.setLevel(logging.ERROR)
+
+    # Create formatter and add it to the handlers
+    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    stdout_handler.setFormatter(formatter)
+    stderr_handler.setFormatter(formatter)
+
+    # Get the root logger
+    logger = logging.getLogger()
+    logger.setLevel(numeric_level)
+
+    # Add handlers to the logger
+    logger.addHandler(stdout_handler)
+    logger.addHandler(stderr_handler)
 
     # Print values to verify
     logging.info(f"metadata_path: {metadata_path}")
