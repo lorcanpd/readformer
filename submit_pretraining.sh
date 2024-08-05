@@ -1,6 +1,6 @@
 #!/bin/bash
 
-BASENAME="1hour_test_readformer_128d_8g_4l"
+BASENAME="1hour_test_readformer_128d_4g_2l"
 
 LOG_DIR="logs/pretrain"
 
@@ -15,10 +15,10 @@ MODEL_DIR="/lustre/scratch126/casm/team274sb/lp23/readformer/models"
 GPU_MEMORY=40960
 MEMORY=16384
 CORES=8
-NUM_ORDER=8
-NUM_LAYERS=4
+NUM_ORDER=4
+NUM_LAYERS=2
 MIN_READ_QUALITY=20
-BATCH_SIZE=64
+BATCH_SIZE=16
 EMB_DIM=128
 MAX_SEQUENCE_LENGTH=8192
 WARM_UP_EPOCHS=10
