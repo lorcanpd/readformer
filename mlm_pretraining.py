@@ -352,7 +352,7 @@ def main():
             batch_size=batch_size,
             min_quality=min_read_quality,
             shuffle=True,
-            num_workers=4,
+            num_workers=0,
             prefetch_factor=1
         )
         # Iterate through data
