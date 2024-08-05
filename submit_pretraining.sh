@@ -48,7 +48,8 @@ for scale in "${SCALES[@]}"; do
 #BSUB -e ${LOG_DIR}/${NAME}_%J.err
 #BSUB -M ${MEMORY}
 #BSUB -n ${CORES}
-#BSUB -gpu "num=1:mode=exclusive_process:j_exclusive=yes:gmem=${GPU_MEMORY}"
+#BSUB -gpu "num=1:mode=exclusive_process:j_exclusive=yes:block=yes:gmem=${GPU_MEMORY}"
+#BSUB -R 'span[ptile=4]'  # Allocate 4 CPU cores per node
 #BSUB -R "select[mem>${MEMORY}] rusage[mem=${MEMORY}] span[hosts=1]"
 #BSUB -W 1:00
 

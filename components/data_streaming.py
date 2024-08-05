@@ -53,7 +53,7 @@ class BAMReadDataset(Dataset):
             max_sequence_length, selected_positions=False, min_quality=0
     ):
         """
-        Initialize the dataset with file paths and metadata.
+        Initialise the dataset with file paths and metadata.
 
         :param file_paths:
             List of paths to BAM files or a directory containing BAM files.
@@ -77,7 +77,7 @@ class BAMReadDataset(Dataset):
                 os.path.join(file_paths, f) for f in os.listdir(file_paths)
                 if (f.endswith('.bam') and f in basenames)
             ]
-        logging.info("BAMReadDataset initialized successfully")
+        logging.info("BAMReadDataset initialised successfully")
 
     def __len__(self):
         return len(self.file_paths)
