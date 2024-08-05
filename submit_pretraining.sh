@@ -50,7 +50,7 @@ for scale in "${SCALES[@]}"; do
 #BSUB -n ${CORES}
 #BSUB -gpu "num=1:mode=exclusive_process:j_exclusive=yes:block=yes:gmem=${GPU_MEMORY}"
 #BSUB -R 'span[ptile=4]'  # Allocate 4 CPU cores per node
-#BSUB -R "select[mem>${MEMORY}] rusage[mem=${MEMORY}] span[hosts=1]"
+#BSUB -R "select[mem>${MEMORY}] rusage[mem=${MEMORY}]" # span[hosts=1]"
 #BSUB -W 1:00
 
 module load cellgen/singularity
