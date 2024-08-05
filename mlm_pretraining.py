@@ -24,6 +24,8 @@ import os
 from contextlib import contextmanager
 import multiprocessing as mp
 
+def get_allocated_cpus():
+    return int(os.getenv('LSB_DJOB_NUMPROC', '1'))
 
 def check_cuda_availability():
     if not torch.cuda.is_available():
@@ -352,7 +354,7 @@ def main():
             batch_size=batch_size,
             min_quality=min_read_quality,
             shuffle=True,
-            num_workers=os.cpu_count()-1
+            num_workers=get_allocated_cpus()-1
             # prefetch_factor=0
         )
         print(f"Data loader created for interval {interval}")

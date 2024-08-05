@@ -14,7 +14,7 @@ METADATA_PATH="/lustre/scratch126/casm/team274sb/lp23/readformer/data/one_sample
 MODEL_DIR="/lustre/scratch126/casm/team274sb/lp23/readformer/models"
 GPU_MEMORY=40960
 MEMORY=32768
-CORES=2
+CORES=4
 NUM_ORDER=4
 NUM_LAYERS=2
 MIN_READ_QUALITY=20
@@ -49,13 +49,14 @@ for scale in "${SCALES[@]}"; do
 #BSUB -M ${MEMORY}
 #BSUB -n ${CORES}
 #BSUB -gpu "num=1:mode=exclusive_process:j_exclusive=yes:block=yes:gmem=${GPU_MEMORY}"
-#BSUB -R 'span[ptile=4]'  # Allocate 4 CPU cores per node
+#BSUB -R 'span[ptile=${CORES}]'  # Allocate 4 CPU cores per node
 #BSUB -R "select[mem>${MEMORY}] rusage[mem=${MEMORY}]" # span[hosts=1]"
 #BSUB -W 1:00
 
 module load cellgen/singularity
 
 singularity exec --nv \
+  --env LSB_DJOB_NUMPROC=${CORES} \
   --bind ${READFORMER_DIR}:/scripts/readformer \
   --bind ${DATA_DIR}:/data/pretrain/BAM \
   --bind ${METADATA_PATH}:/data/pretrain_metadata.csv \
