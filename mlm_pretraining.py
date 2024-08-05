@@ -352,8 +352,8 @@ def main():
             batch_size=batch_size,
             min_quality=min_read_quality,
             shuffle=True,
-            num_workers=0,
-            prefetch_factor=None
+            num_workers=1,
+            prefetch_factor=1
         )
         # Iterate through data
         for batch in data_loader:
