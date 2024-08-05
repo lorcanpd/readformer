@@ -10,7 +10,7 @@ from components.extract_reads import (
 import multiprocessing as mp
 import logging
 
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.DEBUG)
 
 
 def replicate_binary_flag_vector_list(

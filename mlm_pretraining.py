@@ -25,7 +25,7 @@ from contextlib import contextmanager
 import multiprocessing as mp
 import logging
 
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.DEBUG)
 
 
 def get_allocated_cpus():
