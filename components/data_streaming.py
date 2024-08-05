@@ -12,8 +12,6 @@ import logging
 
 logging.basicConfig(level=logging.INFO)
 
-# if torch.cuda.is_available():
-#     mp.set_start_method('spawn', force=True)
 
 def replicate_binary_flag_vector_list(
         binary_flag_vector, sequence_length

@@ -23,9 +23,16 @@ import argparse
 import os
 from contextlib import contextmanager
 import multiprocessing as mp
+import logging
+
+logging.basicConfig(level=logging.INFO)
+
 
 def get_allocated_cpus():
-    return int(os.getenv('LSB_DJOB_NUMPROC', '1'))
+    cpus = int(os.getenv('LSB_DJOB_NUMPROC', '1'))
+    logging.info(f"Allocated CPUs: {cpus}")
+    return cpus
+
 
 def check_cuda_availability():
     if not torch.cuda.is_available():
