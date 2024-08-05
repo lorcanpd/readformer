@@ -197,7 +197,7 @@ def worker_init_fn(worker_id):
 
 def create_data_loader(
         file_paths, metadata_path, nucleotide_threshold, max_sequence_length,
-        batch_size, min_quality, shuffle=True, num_workers=0, prefetch_factor=2
+        batch_size, min_quality, shuffle=True, num_workers=0, prefetch_factor=None
 ):
     """
     Create a DataLoader for batch processing of BAM file reads.
