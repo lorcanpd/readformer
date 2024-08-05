@@ -170,26 +170,29 @@ class InfiniteSampler(Sampler):
 def worker_init_fn(worker_id):
     worker_info = get_worker_info()
     if worker_info is not None:
-        print(f"Initializing worker {worker_info.id}/{worker_info.num_workers}")
+        logging.info(f"Initialising worker {worker_info.id}/{worker_info.num_workers}")
 
         # Pin each worker to a specific CPU core if supported
         try:
             core_id = worker_id % os.cpu_count()
             if hasattr(os, 'sched_setaffinity'):
                 os.sched_setaffinity(0, {core_id})
-                print(f"Worker {worker_info.id} is pinned to CPU core {core_id}")
+                logging.info(f"Worker {worker_info.id} is pinned to CPU core {core_id}")
             else:
-                print(f"CPU affinity setting not supported on this OS.")
+                logging.warning("CPU affinity setting not supported on this OS.")
         except Exception as e:
-            print(f"Error setting CPU affinity: {e}")
+            logging.error(f"Error setting CPU affinity: {e}")
 
         # Ensure CUDA is initialized in each worker
-        if torch.cuda.is_available():
-            device_id = worker_info.id % torch.cuda.device_count()
-            torch.cuda.set_device(device_id)
-            print(f"Worker {worker_info.id} is using device {device_id}")
+        try:
+            if torch.cuda.is_available():
+                device_id = worker_info.id % torch.cuda.device_count()
+                torch.cuda.set_device(device_id)
+                logging.info(f"Worker {worker_info.id} is using device {device_id}")
+        except Exception as e:
+            logging.error(f"Error setting CUDA device: {e}")
     else:
-        print("Initialising main process")
+        logging.info("Initialising main process")
 
 
 def create_data_loader(
@@ -230,7 +233,15 @@ def create_data_loader(
     sampler = InfiniteSampler(dataset, shuffle)
     print("InfiniteSampler created successfully")
 
-    if torch.cuda.is_available() and num_workers > 0:
+    if num_workers is None:
+        worker_flag = False
+    else:
+        if num_workers > 0:
+            worker_flag = True
+        else:
+            worker_flag = False
+
+    if torch.cuda.is_available() and worker_flag:
         multiprocessing_context = mp.get_context('spawn')
         print("Using multiprocessing context: 'spawn'")
     else:
