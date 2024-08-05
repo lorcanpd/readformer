@@ -353,17 +353,11 @@ def main():
             min_quality=min_read_quality,
             shuffle=True,
             num_workers=0,
-            prefetch_factor=1
+            prefetch_factor=None
         )
         # Iterate through data
         for batch in data_loader:
-            # if i > 0:
-            #     # assert that the batch is different from the previous one
-            #     if batches_are_identical(old_batch, batch):
-            #         print("Batches are identical!")
-            #         break
-            #
-            # old_batch = batch
+
             print(f"Processing batch {i} of data loader {j}")
 
             with device_context(device):

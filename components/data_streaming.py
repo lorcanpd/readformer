@@ -172,12 +172,14 @@ class InfiniteSampler(Sampler):
 def worker_init_fn(worker_id):
     worker_info = get_worker_info()
     if worker_info is not None:
-        print(f"Initializing worker {worker_info.id}/{worker_info.num_workers}")
+        print(f"Initialising worker {worker_info.id}/{worker_info.num_workers}")
     else:
-        print("Initializing main process")
+        print("Initialising main process")
     # Ensure CUDA is initialized in each worker
     if torch.cuda.is_available():
-        torch.cuda.init()
+        device_id = worker_info.id % torch.cuda.device_count()
+        torch.cuda.set_device(device_id)
+        print(f"Worker {worker_info.id} is using device {device_id}")
 
 
 def create_data_loader(
@@ -217,7 +219,8 @@ def create_data_loader(
         dataset, batch_size=batch_size, collate_fn=collate_fn, sampler=sampler,
         num_workers=num_workers, prefetch_factor=prefetch_factor,
         pin_memory=False, worker_init_fn=worker_init_fn,
-        multiprocessing_context=multiprocessing_context
+        multiprocessing_context=multiprocessing_context,
+        persistent_workers=True
     )
 
 
@@ -335,18 +338,6 @@ def collate_fn(batch):
                 else torch.int32
             )
 
-    # # Add pin_memory method to batched_data
-    # def pin_memory(batched_data):
-    #     for key in batched_data:
-    #         if isinstance(batched_data[key], torch.Tensor):
-    #             batched_data[key] = batched_data[key].pin_memory()
-    #     return batched_data
-    #
-    # batched_data.pin_memory = lambda: pin_memory(batched_data)
-
     batch = CustomBatch(batched_data)
-
-    # if torch.cuda.is_available():
-    #     batch = batch.pin_memory()
 
     return batch
