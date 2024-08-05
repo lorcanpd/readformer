@@ -215,13 +215,20 @@ def create_data_loader(
     else:
         multiprocessing_context = None
 
-    return DataLoader(
-        dataset, batch_size=batch_size, collate_fn=collate_fn, sampler=sampler,
-        num_workers=num_workers, prefetch_factor=prefetch_factor,
-        pin_memory=False, worker_init_fn=worker_init_fn,
-        multiprocessing_context=multiprocessing_context
-        # persistent_workers=True
-    )
+    if multiprocessing_context is not None:
+        return DataLoader(
+            dataset, batch_size=batch_size, collate_fn=collate_fn, sampler=sampler,
+            num_workers=num_workers, prefetch_factor=prefetch_factor,
+            pin_memory=False, worker_init_fn=worker_init_fn,
+            multiprocessing_context=multiprocessing_context,
+            persistent_workers=True
+        )
+    else:
+        return DataLoader(
+            dataset, batch_size=batch_size, collate_fn=collate_fn, sampler=sampler,
+            num_workers=num_workers, prefetch_factor=prefetch_factor,
+            pin_memory=False, worker_init_fn=worker_init_fn
+        )
 
 
 nucleotide_to_index = {
