@@ -355,6 +355,8 @@ def main():
             num_workers=1,
             prefetch_factor=1
         )
+        print(f"Data loader created for interval {interval}")
+
         # Iterate through data
         for batch in data_loader:
 

@@ -8,6 +8,9 @@ from components.extract_reads import (
     extract_reads_from_position_onward, sample_positions, get_read_info
 )
 import multiprocessing as mp
+import logging
+
+logging.basicConfig(level=logging.INFO)
 
 # if torch.cuda.is_available():
 #     mp.set_start_method('spawn', force=True)
@@ -50,7 +53,7 @@ class BAMReadDataset(Dataset):
             max_sequence_length, selected_positions=False, min_quality=0
     ):
         """
-        Initialise the dataset with file paths and metadata.
+        Initialize the dataset with file paths and metadata.
 
         :param file_paths:
             List of paths to BAM files or a directory containing BAM files.
@@ -63,7 +66,6 @@ class BAMReadDataset(Dataset):
             The sequence length dimension the model expects. Sequences will be
             padded to this length.
         """
-
         self.nucleotide_threshold = nucleotide_threshold
         self.max_sequence_length = max_sequence_length
         self.metadata = pd.read_csv(metadata_path)
@@ -75,13 +77,12 @@ class BAMReadDataset(Dataset):
                 os.path.join(file_paths, f) for f in os.listdir(file_paths)
                 if (f.endswith('.bam') and f in basenames)
             ]
+        logging.info("BAMReadDataset initialized successfully")
 
     def __len__(self):
         return len(self.file_paths)
 
     def __getitem__(self, idx):
-        # To ensure circular sampling, we reset the index to 0 if it exceeds
-        # the number of file paths
         file_path = self.file_paths[idx % len(self.file_paths)]
         sex = self.metadata[
             self.metadata['file_path'] == file_path]['sex'].values[0]
@@ -96,7 +97,7 @@ class BAMReadDataset(Dataset):
                     self.nucleotide_threshold, self.min_quality
                 )
             except Exception as e:
-                print(f"Error extracting reads: {e}")
+                logging.error(f"Error extracting reads: {e}")
                 retries += 1
                 continue
             if read_dict:
@@ -104,7 +105,7 @@ class BAMReadDataset(Dataset):
                 break
             retries += 1
         else:
-            # Return None if no valid read is found after all retries
+            logging.warning("Max retries reached, returning None")
             return None
 
         nucleotide_sequences = []
@@ -133,17 +134,16 @@ class BAMReadDataset(Dataset):
 
         # Pad sequences to the threshold length
         padding_length = self.max_sequence_length - total_sequence_length
-        nucleotide_sequences += [''] * (padding_length)
-        base_qualities += [0.0] * (padding_length)
-        read_qualities += [0.0] * (padding_length)
-        cigar_match += [0.0] * (padding_length)
-        cigar_insertion += [0.0] * (padding_length)
-        bitwise_flags += [[0.0]*12] * (padding_length)
-        positions += [-1] * (padding_length)
+        nucleotide_sequences += [''] * padding_length
+        base_qualities += [0.0] * padding_length
+        read_qualities += [0.0] * padding_length
+        cigar_match += [0.0] * padding_length
+        cigar_insertion += [0.0] * padding_length
+        bitwise_flags += [[0.0]*12] * padding_length
+        positions += [-1] * padding_length
 
-        print(
-            f"Line before returning batch, "
-            f"number of nucleotide sequences: {len(nucleotide_sequences)}"
+        logging.debug(
+            f"Returning batch, number of nucleotide sequences: {len(nucleotide_sequences)}"
         )
         return {
             'nucleotide_sequences': nucleotide_sequences,
@@ -172,14 +172,26 @@ class InfiniteSampler(Sampler):
 def worker_init_fn(worker_id):
     worker_info = get_worker_info()
     if worker_info is not None:
-        print(f"Initialising worker {worker_info.id}/{worker_info.num_workers}")
+        print(f"Initializing worker {worker_info.id}/{worker_info.num_workers}")
+
+        # Pin each worker to a specific CPU core if supported
+        try:
+            core_id = worker_id % os.cpu_count()
+            if hasattr(os, 'sched_setaffinity'):
+                os.sched_setaffinity(0, {core_id})
+                print(f"Worker {worker_info.id} is pinned to CPU core {core_id}")
+            else:
+                print(f"CPU affinity setting not supported on this OS.")
+        except Exception as e:
+            print(f"Error setting CPU affinity: {e}")
+
+        # Ensure CUDA is initialized in each worker
+        if torch.cuda.is_available():
+            device_id = worker_info.id % torch.cuda.device_count()
+            torch.cuda.set_device(device_id)
+            print(f"Worker {worker_info.id} is using device {device_id}")
     else:
         print("Initialising main process")
-    # Ensure CUDA is initialized in each worker
-    if torch.cuda.is_available():
-        device_id = worker_info.id % torch.cuda.device_count()
-        torch.cuda.set_device(device_id)
-        print(f"Worker {worker_info.id} is using device {device_id}")
 
 
 def create_data_loader(
@@ -204,37 +216,41 @@ def create_data_loader(
     :return:
         DataLoader instance.
     """
+    print("Creating BAMReadDataset...")
     dataset = BAMReadDataset(
         file_paths, metadata_path, nucleotide_threshold, max_sequence_length,
         min_quality=min_quality
     )
+
+    if len(dataset) > 0:
+        print("Dataset created successfully")
+    else:
+        print("Dataset is empty")
+        return None
+
+    print("Creating InfiniteSampler...")
     sampler = InfiniteSampler(dataset, shuffle)
+    print("InfiniteSampler created successfully")
 
     if torch.cuda.is_available() and num_workers > 0:
         multiprocessing_context = mp.get_context('spawn')
+        print("Using multiprocessing context: 'spawn'")
     else:
         multiprocessing_context = None
+        print("Multiprocessing context is None")
 
-    # if multiprocessing_context is not None:
-    #     return DataLoader(
-    #         dataset, batch_size=batch_size, collate_fn=collate_fn, sampler=sampler,
-    #         num_workers=num_workers, prefetch_factor=prefetch_factor,
-    #         pin_memory=False, worker_init_fn=worker_init_fn,
-    #         multiprocessing_context=multiprocessing_context,
-    #         persistent_workers=True
-    #     )
-    # else:
-    #     return DataLoader(
-    #         dataset, batch_size=batch_size, collate_fn=collate_fn, sampler=sampler,
-    #         num_workers=num_workers, prefetch_factor=prefetch_factor,
-    #         pin_memory=False, worker_init_fn=worker_init_fn
-    #     )
-    return DataLoader(
+    print("Creating DataLoader...")
+    data_loader = DataLoader(
         dataset, batch_size=batch_size, collate_fn=collate_fn, sampler=sampler,
         num_workers=num_workers, prefetch_factor=prefetch_factor,
         pin_memory=False, worker_init_fn=worker_init_fn,
-        multiprocessing_context=multiprocessing_context
+        multiprocessing_context=multiprocessing_context,
+        persistent_workers=(multiprocessing_context is not None)
     )
+
+    print("DataLoader created successfully")
+
+    return data_loader
 
 
 nucleotide_to_index = {
