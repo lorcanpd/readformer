@@ -12,7 +12,7 @@ SIF="/nfs/users/nfs_l/lp23/sifs/readformer.sif"
 DATA_DIR="/lustre/scratch126/casm/team274sb/lp23/readformer/data/pretrain_bams"
 METADATA_PATH="/lustre/scratch126/casm/team274sb/lp23/readformer/data/one_sample_metadata.csv"
 MODEL_DIR="/lustre/scratch126/casm/team274sb/lp23/readformer/models"
-GPU_MEMORY=40960
+GPU_MEMORY=81920
 MEMORY=16384
 CORES=4
 NUM_ORDER=4
@@ -32,7 +32,7 @@ MAIN_LR=1e-3
 CORRUPTION_SCALE=0.5
 NAME="TEST"
 
-BASENAME="1hour_test_readformer_bs${BATCH_SIZE}_${EMB_DIM}d_4${NUM_ORDER}_2${NUM_LAYERS}"
+BASENAME="0.5hour_test_readformer_bs${BATCH_SIZE}_${EMB_DIM}d_${NUM_ORDER}g_${NUM_LAYERS}l"
 
 #SCALES=( 0.5 0.75 0.9 )
 
@@ -54,7 +54,7 @@ for scale in "${SCALES[@]}"; do
 #BSUB -gpu "num=1:mode=exclusive_process:j_exclusive=yes:block=yes:gmem=${GPU_MEMORY}"
 #BSUB -R 'span[ptile=${CORES}]'  # Allocate 4 CPU cores per node
 #BSUB -R "select[mem>${MEMORY}] rusage[mem=${MEMORY}]" # span[hosts=1]"
-#BSUB -W 1:00
+#BSUB -W 0:30
 
 module load cellgen/singularity
 
