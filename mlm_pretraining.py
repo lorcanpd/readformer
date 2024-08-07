@@ -390,8 +390,8 @@ def main():
             batch_size=batch_size,
             min_quality=min_read_quality,
             shuffle=True,
-            # num_workers=get_allocated_cpus()-1,
-            num_workers=0,
+            num_workers=get_allocated_cpus()-1,
+            # num_workers=0,
             prefetch_factor=2
         )
         logging.info(f"Data loader created for interval {interval}")
