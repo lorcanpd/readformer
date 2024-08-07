@@ -87,8 +87,7 @@ singularity exec --nv \
     --main_lr ${MAIN_LR} \
     --corruption_scale ${CORRUPTION_SCALE} \
     --name ${NAME} \
-    --logging DEBUG \
-    --wandb
+    --logging DEBUG
 
 EOF
   )
