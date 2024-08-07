@@ -255,7 +255,6 @@ def main():
     logging.info(f"iters_in_epoch: {iters_in_epoch}")
     logging.info(f"corruption_rate: {corruption_rate}")
     logging.info(f"proportion_random: {proportion_random}")
-    breakpoint()
     logging.info(f"main_lr: {main_lr}")
     logging.info(f"readformer: {readformer}")
     if readformer:
@@ -521,7 +520,7 @@ def main():
                     torch.cuda.synchronize()
 
             logging.debug(f"Loss at iteration {i}: {loss.item()}")
-            breakpoint()
+
             if args.wandb:
                 wandb.log(
                     {
