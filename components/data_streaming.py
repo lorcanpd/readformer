@@ -170,9 +170,18 @@ def worker_init_fn(worker_id):
     if worker_info is not None:
         logging.info(f"Initialising worker {worker_info.id}/{worker_info.num_workers}")
 
+        # This should prevent pytorch from using more than one thread per worker.
+        os.environ['OMP_NUM_THREADS'] = '1'
+        os.environ['MKL_NUM_THREADS'] = '1'
+        os.environ['NUMEXPR_NUM_THREADS'] = '1'
+        os.environ['VECLIB_MAXIMUM_THREADS'] = '1'
+        os.environ['OPENBLAS_NUM_THREADS'] = '1'
+
+        # Get the number of allocated CPU cores from LSF
+        total_cores = int(os.getenv('LSB_DJOB_NUMPROC', os.cpu_count()))
+        core_id = worker_id % total_cores
         # Pin each worker to a specific CPU core if supported
         try:
-            core_id = worker_id % os.cpu_count()
             if hasattr(os, 'sched_setaffinity'):
                 os.sched_setaffinity(0, {core_id})
                 logging.info(f"Worker {worker_info.id} is pinned to CPU core {core_id}")
@@ -181,7 +190,7 @@ def worker_init_fn(worker_id):
         except Exception as e:
             logging.error(f"Error setting CPU affinity: {e}")
 
-        # Ensure CUDA is initialized in each worker
+        # Ensure CUDA is initialised in each worker
         try:
             if torch.cuda.is_available():
                 device_id = worker_info.id % torch.cuda.device_count()
