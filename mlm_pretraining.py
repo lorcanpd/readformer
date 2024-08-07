@@ -305,22 +305,22 @@ def main():
     # Good model.
     nucleotide_embeddings = NucleotideEmbeddingLayer(
         emb_dim, mlm_mode=True
-    ).apply(init_weights)  # .to(device)
+    ).apply(init_weights).to(device)
     float_metric_embeddings = MetricEmbedding(
         # emb_dim // 2,
         emb_dim,
         name='float', num_metrics=2
-    ).apply(init_weights)  # .to(device)
+    ).apply(init_weights).to(device)
     binary_metric_embeddings = MetricEmbedding(
         # emb_dim // 2,
         emb_dim,
         name='binary', num_metrics=14
-    ).apply(init_weights)  # .to(device)
+    ).apply(init_weights).to(device)
 
     readformer = Model(
         emb_dim=emb_dim, heads=num_heads, num_layers=num_layers,
         readformer=readformer, kernel_size=kernel_size
-    ).apply(init_weights)  # .to(device)
+    ).apply(init_weights).to(device)
 
     # Set the scaling vectors to one and freeze them.
     for layer in readformer.layers:
@@ -332,7 +332,7 @@ def main():
 
     classifier = MLMClassifier(
         emb_dim=emb_dim, num_classes=nucleotide_embeddings.padding_idx
-    ).apply(init_weights)  # .to(device)
+    ).apply(init_weights).to(device)
 
     params = (
             list(nucleotide_embeddings.parameters()) +
@@ -402,18 +402,17 @@ def main():
             logging.debug(f"Processing batch {i} of data loader {j}")
 
             with device_context(device):
-                nucleotide_sequences = batch['nucleotide_sequences']  # .to(device)
+                nucleotide_sequences = batch['nucleotide_sequences'].to(device)
                 valid_mask = (
                         nucleotide_sequences !=
                         nucleotide_embeddings.padding_idx
                 )
-                base_qualities = batch['base_qualities']  # .to(device)
-                read_qualities = batch['read_qualities']  # .to(device)
-                cigar_match = batch['cigar_match']  # .to(device)
-                cigar_insertion = batch['cigar_insertion']  # .to(device)
-                bitwise_flags = batch['bitwise_flags']  # .to(device)
-                positions = batch['positions']  # .to(device)
-
+                base_qualities = batch['base_qualities'].to(device)
+                read_qualities = batch['read_qualities'].to(device)
+                cigar_match = batch['cigar_match'].to(device)
+                cigar_insertion = batch['cigar_insertion'].to(device)
+                bitwise_flags = batch['bitwise_flags'].to(device)
+                positions = batch['positions'].to(device)
 
                 # Identify the positions to corrupt
                 all_replaced = get_replacement_mask(
@@ -441,7 +440,7 @@ def main():
                 metric_emb = float_metric_embeddings(
                     float_metrics) + binary_metric_embeddings(binary_vec)
                 # Get as many masked embeddings as there are replacement positions
-                masked_sequence = nucleotide_sequences.clone()
+                masked_sequence = nucleotide_sequences.clone()#.to(device)
                 # apply the mask token to the masked positions
                 masked_sequence[
                     mask_token_mask] = nucleotide_embeddings.mask_index
@@ -508,8 +507,16 @@ def main():
 
                 optimiser.zero_grad()
                 loss.backward()
+
+                if torch.cuda.is_available():
+                    torch.cuda.synchronize()
+
                 torch.nn.utils.clip_grad_norm_(readformer.parameters(), max_norm=1)
                 optimiser.step()
+
+                if torch.cuda.is_available():
+                    torch.cuda.synchronize()
+
             logging.debug(f"Loss at iteration {i}: {loss.item()}")
 
             if args.wandb:

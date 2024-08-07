@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 
+from components.better_device_handling import Module
 
 class NucleotideLookup:
     def __init__(self):
@@ -55,7 +56,7 @@ class NucleotideLookup:
         return nucleotides
 
 
-class MetricEmbedding(nn.Module):
+class MetricEmbedding(Module):
     def __init__(self, embedding_dim, num_metrics, name=None):
         """
         Initialises the metric embedding layer.
@@ -83,7 +84,7 @@ class MetricEmbedding(nn.Module):
         return torch.matmul(inputs, self.embedding_matrix)
 
 
-class NucleotideEmbeddingLayer(nn.Module):
+class NucleotideEmbeddingLayer(Module):
     def __init__(self, embedding_dim, mlm_mode=False):
         """
         Initialises the nucleotide embedding layer.

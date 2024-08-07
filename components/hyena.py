@@ -2,8 +2,10 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from components.better_device_handling import Module
 
-class HyenaProjection(nn.Module):
+
+class HyenaProjection(Module):
     """
     Layer for projecting input embeddings into multiple groups.
 
@@ -53,7 +55,7 @@ class HyenaProjection(nn.Module):
         return z
 
 
-class FeedForward(nn.Module):
+class FeedForward(Module):
     """
     Feed-forward layer with configurable activation function and dimensions.
 
@@ -137,7 +139,7 @@ class FeedForward(nn.Module):
         return x
 
 
-class HyenaFilter(nn.Module):
+class HyenaFilter(Module):
     """
     Learns filters based on positionally transformed embeddings.
 
@@ -190,7 +192,7 @@ class HyenaFilter(nn.Module):
         # ).float().view(1, 1, 1, -1)
         positions = torch.arange(
             seq_length
-        ).float().view(1, 1, -1)
+        ).float().view(1, 1, -1).to(positional_encodings.device)
 
         # gaussian_windows = torch.exp(
         #     -0.5 * (
@@ -198,6 +200,7 @@ class HyenaFilter(nn.Module):
         #                     positions - self.mu * seq_length
         #             ).permute(2, 1, 0, 3) / self.sigma
         #     ) ** 2)#.to(h_hat.device)
+
         gaussian_windows = torch.exp(
             -0.5 * (
                     (positions - self.mu * self.max_seq_length) / self.sigma
@@ -212,7 +215,7 @@ class HyenaFilter(nn.Module):
         return filters
 
 
-class FFTLongConv(nn.Module):
+class FFTLongConv(Module):
     """
     FFT-based long convolution layer.
 

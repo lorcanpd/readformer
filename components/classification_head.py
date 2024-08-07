@@ -3,6 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from torch.nn.utils import spectral_norm as lin_layer_sn
+from components.better_device_handling import Module
 
 def spectral_norm(weight, n_power_iterations=1):
     """
@@ -34,7 +35,7 @@ def spectral_norm(weight, n_power_iterations=1):
     return weight / spectral_norm_value
 
 
-class TransformerBinaryClassifier(nn.Module):
+class TransformerBinaryClassifier(Module):
     """
     Binary classifier that transforms the vector outputs of a transformer model
     into binary predictions.
@@ -117,7 +118,7 @@ class TransformerBinaryClassifier(nn.Module):
         return output
 
 
-class AdversarialLayer(nn.Module):
+class AdversarialLayer(Module):
     """
     Adversarial layer for generating adversarial parameters to perturb the
     original read sequences. For example, it learns to produce replacement
@@ -220,7 +221,7 @@ class AdversarialLayer(nn.Module):
 
 
 # Under development
-class MLMClassifier(nn.Module):
+class MLMClassifier(Module):
     """
     Classification layer for Masked Language Modeling (MLM).
 
@@ -248,7 +249,7 @@ class MLMClassifier(nn.Module):
         return logits
 
 
-class MLMLoss(nn.Module):
+class MLMLoss(Module):
     """
     Loss function for Masked Language Modeling (MLM).
 

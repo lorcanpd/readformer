@@ -165,7 +165,7 @@ def generate_random_for_unique_positions(positions):
         )
         lognorms = torch.distributions.LogNormal(
             0, 1
-        ).sample(unique_vals.size())#.to(positions.device)
+        ).sample(unique_vals.size()).to(positions.device)
         random_vals = 1 - lognorms
 
         unique_values.append(unique_vals)
@@ -236,7 +236,7 @@ def get_replacement_mask(positions, rate=0.15):
     # Generate random numbers for each valid position in the sequence
     element_limit = 1 / broadcasted_randoms
     element_randoms = torch.rand(
-        positions.shape, #device=positions.device,
+        positions.shape, device=positions.device,
         dtype=torch.float32
     ) * (1 - broadcasted_randoms) + broadcasted_randoms
     product = element_randoms * broadcasted_randoms * element_limit

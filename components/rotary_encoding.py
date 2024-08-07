@@ -1,5 +1,6 @@
 
 import torch
+import torch.nn as nn
 import matplotlib.pyplot as plt
 import numpy as np
 
@@ -18,7 +19,7 @@ def compute_theta_vector(d_model):
     i = torch.arange(1, d_model // 2 + 1, dtype=torch.float32)
     # Compute theta_i for each dimension
     theta_i = torch.pow(10000.0, -2 * (i - 1) / d_model)
-    return theta_i
+    return nn.Parameter(theta_i)
 
 
 def compute_rotation_angles(loci_positions, d_model, theta_vector):
@@ -55,7 +56,6 @@ def compute_rotation_angles(loci_positions, d_model, theta_vector):
     # Expand loci_positions for element-wise multiplication
     # Shape: [batch_size, seq_len, 1]
     loci_positions = loci_positions.float().unsqueeze(-1)
-
     # Compute angles for the whole batch
     angles = loci_positions * theta_vector
 

@@ -5,6 +5,9 @@ from components.readformer import ReadformerBlock
 from components.self_attention import TransformerBlock
 
 
+from components.better_device_handling import Module
+
+
 def init_weights(m):
     """
     Initialise the weights of any model.

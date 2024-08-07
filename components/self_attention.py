@@ -6,9 +6,9 @@ from components.rotary_encoding import (
     compute_theta_vector, compute_rotation_angles, apply_dimensionwise_rotation
 )
 from components.hyena import FeedForward
+from components.better_device_handling import Module
 
-
-class RoPEMultiHeadSelfAttention(nn.Module):
+class RoPEMultiHeadSelfAttention(Module):
     """
     Multi-Head Self-Attention layer with rotary positional encoding.
 
@@ -125,7 +125,7 @@ class RoPEMultiHeadSelfAttention(nn.Module):
         return output
 
 
-class MultiHeadSelfAttention(nn.Module):
+class MultiHeadSelfAttention(Module):
     """
     Multi-Head Self-Attention layer without rotary positional encoding.
 
@@ -212,7 +212,7 @@ class MultiHeadSelfAttention(nn.Module):
         return output
 
 
-class TransformerBlock(nn.Module):
+class TransformerBlock(Module):
     """
     Transformer block that can switch between self-attention and Hyena block.
 

@@ -10,6 +10,8 @@ from components.rotary_encoding import (
 )
 from components.self_attention import MultiHeadSelfAttention
 
+from components.better_device_handling import Module
+
 # TODO: Create some sort of scaling vector system for rapid fine-tuning. Perhaps
 # allow full finetuning for the Hyena-based components and partial finetuning
 # for the self-attention components and feedforward.
@@ -34,19 +36,19 @@ def split_into_reads(embeddings, positions):
     # Calculate position differences to determine the boundaries of segments
     position_differences = torch.diff(
         positions, dim=1,
-        append=torch.full((batch_size, 1), -1)#, device=embeddings.device
-    )#.to(embeddings.device)
+        append=torch.full((batch_size, 1), -1).to(embeddings.device)
+    ).to(embeddings.device)
 
     segment_starts = torch.cat(
         tensors=(
             torch.full(
-                size=(batch_size, 1), fill_value=True, #device=embeddings.device
+                size=(batch_size, 1), fill_value=True, device=embeddings.device
             ),
             position_differences != 1
         ),
         dim=1
     )[..., :-1]
-    segment_ends = (position_differences != 1)#.to(embeddings.device)
+    segment_ends = (position_differences != 1).to(embeddings.device)
 
     # Gather all segment indices
     segmented_inputs = []
@@ -76,15 +78,15 @@ def split_into_reads(embeddings, positions):
         for pos in segmented_positions
     ]
 
-    return (torch.stack(padded_inputs),#.to(embeddings.device),
-            torch.stack(reshaped_positions),#.to(embeddings.device),
-            torch.stack(segment_starts_indices),#.to(embeddings.device),
-            torch.tensor(batch_indices))#.to(embeddings.device))
+    return (torch.stack(padded_inputs).to(embeddings.device),
+            torch.stack(reshaped_positions).to(embeddings.device),
+            torch.stack(segment_starts_indices).to(embeddings.device),
+            torch.tensor(batch_indices).to(embeddings.device))
 
 
 def reassemble_sequences(original_shape, read_tensor, positions, segment_starts, batch_indices):
     # batch_size, seq_length, emb_dim = read_tensor.shape
-    output = torch.zeros(original_shape)#, device=read_tensor.device)
+    output = torch.zeros(original_shape, device=read_tensor.device)
 
     for processed_read, read_positions, start_idx, batch_idx in zip(
         read_tensor, positions, segment_starts, batch_indices
@@ -127,7 +129,7 @@ def reshape_by_position_and_track(inputs, positions):
         )
 
     all_positions_tensor = torch.zeros(
-        (len(combos), max_embeddings_count, emb_dim), #device=inputs.device
+        (len(combos), max_embeddings_count, emb_dim), device=inputs.device
     )
 
     for key, value in index_map.items():
@@ -138,7 +140,7 @@ def reshape_by_position_and_track(inputs, positions):
     return all_positions_tensor, index_map
 
 
-class RotaryHyenaFilter(nn.Module):
+class RotaryHyenaFilter(Module):
     """
     Wraps HyenaFilter but instead of providing normal positional encodings,
     it provides position-wise rotated embeddings as positional encodings.
@@ -178,7 +180,7 @@ class RotaryHyenaFilter(nn.Module):
         return filters
 
 
-class ReadwiseHyena(nn.Module):
+class ReadwiseHyena(Module):
     """
     A custom, position-aware Hyena block combining projection, filter, and
     FFT-based long convolution. Can be used as a direct replacement to
@@ -223,8 +225,8 @@ class ReadwiseHyena(nn.Module):
 
         # device = embeddings.device
         original_shape = embeddings.shape
-        # self.B = self.B.to(device)
-        # self.output_projection = self.output_projection.to(device)
+        self.B = self.B#.to(device)
+        self.output_projection = self.output_projection#.to(device)
 
         # Split the input embeddings into reads
         (
@@ -251,10 +253,11 @@ class ReadwiseHyena(nn.Module):
             original_shape, hyena_out, read_positions, start_indices,
             batch_indices
         )
+
         return hyena_out
 
 
-class PositionwiseSelfAttention(nn.Module):
+class PositionwiseSelfAttention(Module):
 
     def __init__(self, emb_dim, num_heads):
         super(PositionwiseSelfAttention, self).__init__()
@@ -274,7 +277,7 @@ class PositionwiseSelfAttention(nn.Module):
 
         # Reshape the self-attention output to the original shape using the
         # position_index_map
-        output = torch.zeros(embeddings.shape)#, device=embeddings.device)
+        output = torch.zeros(embeddings.shape, device=embeddings.device)
 
         for key, index in index_map.items():
             old_row, old_idx = key
@@ -284,7 +287,7 @@ class PositionwiseSelfAttention(nn.Module):
         return output
 
 
-class ReadformerBlock(nn.Module):
+class ReadformerBlock(Module):
 
     def __init__(self, emb_dim, n_order, kernel_size):
         super(ReadformerBlock, self).__init__()
