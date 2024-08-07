@@ -231,7 +231,7 @@ def create_data_loader(
     sampler = InfiniteSampler(dataset, shuffle)
     logging.info("InfiniteSampler created successfully")
 
-    if torch.cuda.is_available() and num_workers is None:
+    if torch.cuda.is_available() and num_workers is not 0:
         multiprocessing_context = mp.get_context('spawn')
         logging.info("Using multiprocessing context: 'spawn'")
     else:

@@ -12,11 +12,11 @@ SIF="/nfs/users/nfs_l/lp23/sifs/readformer.sif"
 DATA_DIR="/lustre/scratch126/casm/team274sb/lp23/readformer/data/pretrain_bams"
 METADATA_PATH="/lustre/scratch126/casm/team274sb/lp23/readformer/data/one_sample_metadata.csv"
 MODEL_DIR="/lustre/scratch126/casm/team274sb/lp23/readformer/models"
-GPU_MEMORY=81920
+GPU_MEMORY=40960
 MEMORY=32768
 CORES=4
 NUM_ORDER=4
-NUM_LAYERS=4
+NUM_LAYERS=3
 MIN_READ_QUALITY=20
 BATCH_SIZE=64
 EMB_DIM=128
@@ -87,7 +87,8 @@ singularity exec --nv \
     --main_lr ${MAIN_LR} \
     --corruption_scale ${CORRUPTION_SCALE} \
     --name ${NAME} \
-    --logging DEBUG
+    --logging DEBUG \
+    --wandb
 
 EOF
   )
