@@ -255,6 +255,7 @@ def main():
     logging.info(f"iters_in_epoch: {iters_in_epoch}")
     logging.info(f"corruption_rate: {corruption_rate}")
     logging.info(f"proportion_random: {proportion_random}")
+    breakpoint()
     logging.info(f"main_lr: {main_lr}")
     logging.info(f"readformer: {readformer}")
     if readformer:
@@ -348,6 +349,8 @@ def main():
         optimizer=optimiser, warmup=iters_in_epoch * warm_up_epochs,
         base_lr=main_lr
     )
+    # Skip the lr = 0 at the start.q
+    scheduler.step()
 
     loss_fn = MLMLoss()
 
@@ -518,13 +521,13 @@ def main():
                     torch.cuda.synchronize()
 
             logging.debug(f"Loss at iteration {i}: {loss.item()}")
-
+            breakpoint()
             if args.wandb:
                 wandb.log(
                     {
                         "loss": loss.item(), "iteration": i,
                         "batch_accuracy": batch_accuracy,
-                        "lr": scheduler.get_last_lr(),
+                        "lr": scheduler.get_last_lr()[0],
                         "interval": intervals[j],
                         "corruption_rate": corruption_rates[j]
                     }
