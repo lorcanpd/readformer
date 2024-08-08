@@ -518,41 +518,41 @@ def main():
                 # Get the output from the model
                 # Profile every 10th batch
                 profile_batch = (i % 10 == 0) and profiling
-                # with conditional_profiler(
-                #         profile_batch, use_cuda=torch.cuda.is_available()
-                # ) as prof:
-                output = readformer(model_input, positions)
-                output = classifier(output)
+                with conditional_profiler(
+                        profile_batch, use_cuda=torch.cuda.is_available()
+                ) as prof:
+                    output = readformer(model_input, positions)
+                    output = classifier(output)
 
-                batch_accuracy = mlm_accuracy(output, nucleotide_sequences)
+                    batch_accuracy = mlm_accuracy(output, nucleotide_sequences)
 
-                # Main model loss and optimisation
-                loss = loss_fn(
-                    output[valid_mask],
-                    nucleotide_sequences[valid_mask]
-                )
+                    # Main model loss and optimisation
+                    loss = loss_fn(
+                        output[valid_mask],
+                        nucleotide_sequences[valid_mask]
+                    )
 
-                optimiser.zero_grad()
-                loss.backward()
+                    optimiser.zero_grad()
+                    loss.backward()
 
+                    if torch.cuda.is_available():
+                        torch.cuda.synchronize()
+
+                    # torch.nn.utils.clip_grad_norm_(readformer.parameters(), max_norm=1)
+                    optimiser.step()
+
+                    if torch.cuda.is_available():
+                        torch.cuda.synchronize()
+
+            if profile_batch:
                 if torch.cuda.is_available():
-                    torch.cuda.synchronize()
-
-                # torch.nn.utils.clip_grad_norm_(readformer.parameters(), max_norm=1)
-                optimiser.step()
-
-                if torch.cuda.is_available():
-                    torch.cuda.synchronize()
-
-            # if profile_batch:
-            #     if torch.cuda.is_available():
-            #         profile_data = prof.key_averages().table(
-            #             sort_by="cuda_time_total"
-            #         )
-            #     else:
-            #         profile_data = prof.key_averages().table(
-            #             sort_by="cpu_time_total"
-            #         )
+                    profile_data = prof.key_averages().table(
+                        sort_by="cuda_time_total"
+                    )
+                else:
+                    profile_data = prof.key_averages().table(
+                        sort_by="cpu_time_total"
+                    )
 
             logging.debug(f"Loss at iteration {i}: {loss.item()}")
 
@@ -566,8 +566,8 @@ def main():
                         "corruption_rate": corruption_rates[j]
                     }
                 )
-                # if profile_batch:
-                #     wandb.log({"profile_data": wandb.Html(profile_data)})
+                if profile_batch:
+                    wandb.log({"profile_data": wandb.Html(profile_data)})
 
             epoch_losses.append(loss.item())
             scheduler.step()

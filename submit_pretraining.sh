@@ -88,6 +88,7 @@ singularity exec --nv \
     --corruption_scale ${CORRUPTION_SCALE} \
     --name ${NAME} \
     --wandb \
+    --logging DEBUG \
     --profiling
 
 EOF
