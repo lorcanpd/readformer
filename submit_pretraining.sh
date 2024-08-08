@@ -16,7 +16,7 @@ GPU_MEMORY=40960
 MEMORY=32768
 CORES=4
 NUM_ORDER=4
-NUM_LAYERS=2
+#NUM_LAYERS=2
 MIN_READ_QUALITY=20
 BATCH_SIZE=128
 EMB_DIM=128
@@ -28,20 +28,21 @@ CORRUPTION_RATE="variable"
 PROPORTION_RANDOM=0.1
 MAIN_LR=1e-3
 
+#LAYER_NUMS=( 2 4 6 )
+LAYER_NUMS=( 2 )
 
 #CORRUPTION_SCALE=0.5
-NAME="TEST"
+#NAME="TEST"
 
-BASENAME="6hour_PROFILING_readformer_bs${BATCH_SIZE}_${EMB_DIM}d_${NUM_ORDER}g_${NUM_LAYERS}l"
+NAME="6hour_testing_of_model_depth"
 
 #SCALES=( 0.5 0.75 0.9 )
+SCALE=0.75
 
-SCALES=( 0.9 )
-
-for scale in "${SCALES[@]}"; do
+for NUM_LAYERS in "${LAYER_NUMS[@]}"; do
   # Set the arguments
-  NAME="${BASENAME}_corrupt_${scale}"
-  CORRUPTION_SCALE=${scale}
+#  NAME="${BASENAME}_corrupt_${scale}"
+  CORRUPTION_SCALE=${SCALE}
 
   job_id=$(bsub << EOF | grep -oE "[0-9]+"
 #!/bin/bash
@@ -54,7 +55,7 @@ for scale in "${SCALES[@]}"; do
 #BSUB -gpu "num=1:mode=exclusive_process:j_exclusive=yes:block=yes:gmem=${GPU_MEMORY}"
 #BSUB -R 'span[hosts=1] span[ptile=${CORES}]'  # Allocate 4 CPU cores per node
 #BSUB -R "select[mem>${MEMORY}] rusage[mem=${MEMORY}]" # span[hosts=1]"
-#BSUB -W 6:00
+#BSUB -W 12:00
 
 module load cellgen/singularity
 
@@ -87,17 +88,15 @@ singularity exec --nv \
     --main_lr ${MAIN_LR} \
     --corruption_scale ${CORRUPTION_SCALE} \
     --name ${NAME} \
-    --wandb \
-    --logging DEBUG \
-    --profiling
+    --wandb
 
 EOF
   )
 
   if [[ $? -ne 0 ]]; then
-    echo "Error submitting job with corruption rate scaling ${scale}"
+    echo "Error submitting readformer job with ${NUM_LAYERS} layers"
     exit 1
   fi
 
-  echo "Submitted job ${job_id} with corruption rate scaling ${scale}"
+  echo "Submitted readformer job ${job_id} with ${NUM_LAYERS} layers"
 done
