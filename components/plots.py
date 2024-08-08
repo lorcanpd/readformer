@@ -294,6 +294,66 @@ def plot_aligned_sequences(original_sequences, masked_sequences, replaced_sequen
     ax.set_title(title)
     plt.show()
 
+
+def visualise_gaussians(hyena_filter, seq_length=None):
+    """
+    Visualise the Gaussian windows learned by the HyenaFilter model.
+
+    :param hyena_filter:
+        An instance of the HyenaFilter class.
+    :param seq_length:
+        The sequence length for visualization. If None, use
+        hyena_filter.max_seq_length.
+    """
+    if seq_length is None:
+        seq_length = hyena_filter.max_seq_length
+
+    positions = np.arange(seq_length).reshape(1, 1, -1)
+
+    mu = hyena_filter.mu.detach().cpu().numpy() * seq_length
+    sigma = hyena_filter.sigma.detach().cpu().numpy()
+
+    gaussian_windows = np.exp(-0.5 * ((positions - mu) / sigma) ** 2)
+
+    for i in range(hyena_filter.n_order):
+        plt.plot(
+            positions.flatten(), gaussian_windows[i, 0, :].flatten(),
+            label=f'Order {i + 1}'
+        )
+
+    plt.xlabel('Position')
+    plt.ylabel('Gaussian Value')
+    plt.title('Learned Gaussian Windows')
+    plt.legend()
+    plt.show()
+
+
+# TODO: Needs work! Not sure how to capture the periodicity of the positional
+#  encodings and how they change after the feed-forward network. Too many dims!
+def visualise_ffn_transformation(hyena_filter, positional_encodings):
+    """
+    Visualise the feed-forward network transformation of the positional
+    encodings.
+
+    :param hyena_filter:
+        An instance of the HyenaFilter class.
+    :param positional_encodings:
+        A tensor of positional encodings.
+    """
+    with torch.no_grad():
+        ffn_output = hyena_filter.ffn(
+            positional_encodings).detach().cpu().numpy()
+
+    seq_length = positional_encodings.size(1)
+
+    plt.imshow(ffn_output[0].T, aspect='auto', cmap='viridis')
+    plt.colorbar()
+    plt.xlabel('Sequence Position')
+    plt.ylabel('Feature Dimension')
+    plt.title('Feed-Forward Network Transformation')
+    plt.show()
+
+
 #
 # original_sequences = [
 #     torch.tensor([0, 3, 0, 2, 0, 3, 0, 2]),

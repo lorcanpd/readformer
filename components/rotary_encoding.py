@@ -19,7 +19,7 @@ def compute_theta_vector(d_model):
     i = torch.arange(1, d_model // 2 + 1, dtype=torch.float32)
     # Compute theta_i for each dimension
     theta_i = torch.pow(10000.0, -2 * (i - 1) / d_model)
-    return nn.Parameter(theta_i)
+    return nn.Parameter(theta_i, requires_grad=False)
 
 
 def compute_rotation_angles(loci_positions, d_model, theta_vector):

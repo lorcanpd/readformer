@@ -148,7 +148,7 @@ class RotaryHyenaFilter(Module):
     :param emb_dim:
         Dimension of the input embeddings.
     :param n_order:
-        The numb ser of long convolution filters to generate.
+        The number of long convolution filters to generate.
     """
 
     def __init__(self, emb_dim, n_order):

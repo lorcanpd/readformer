@@ -138,6 +138,10 @@ def get_args():
         '--logging', type=str, default='INFO',
         help='Logging level.'
     )
+    parser.add_argument(
+        '--profiling', action='store_true',
+        help='Enable profiling.'
+    )
 
     args = parser.parse_args()
     return args
@@ -186,6 +190,23 @@ def device_context(device):
         yield
 
 
+@contextmanager
+def conditional_profiler(condition, use_cuda=True):
+    """
+    A context manager that profiles the code block if the condition is met.
+
+    :param condition:
+        A condition to determine whether to profile the code block.
+    :param use_cuda:
+        Whether to use CUDA for profiling.
+    """
+    if condition:
+        with torch.autograd.profiler.profile(use_cuda=use_cuda) as prof:
+            yield prof
+    else:
+        yield None
+
+
 def main():
     args = get_args()
 
@@ -212,6 +233,7 @@ def main():
     kernel_size = args.kernel_size
     checkpoint_path = f"{args.model_dir}/{args.name}_latest.pth"
     wand_api_path = args.wandb_api_path
+    profiling = args.profiling
 
     # Map the string logging level to the actual logging level
     numeric_level = getattr(logging, args.logging.upper(), None)
@@ -393,7 +415,6 @@ def main():
             min_quality=min_read_quality,
             shuffle=True,
             num_workers=get_allocated_cpus()-1,
-            # num_workers=0,
             prefetch_factor=2
         )
         logging.info(f"Data loader created for interval {interval}")
@@ -449,7 +470,7 @@ def main():
                 # TODO For plotting replacements.
                 # masked_seq = masked_sequence
                 # randomise the nucleotides at the random positions
-                num_random_replacements = random_mask.sum().item()
+                # num_random_replacements = random_mask.sum().item()
                 # MAke all the random replacements the same at the same position
 
                 # Flatten the positions and random_mask tensors for easier processing
@@ -495,29 +516,43 @@ def main():
                     ~mask_token_mask).float().unsqueeze(-1)
 
                 # Get the output from the model
+                # Profile every 10th batch
+                profile_batch = (i % 10 == 0) and profiling
+                with conditional_profiler(
+                        profile_batch, use_cuda=torch.cuda.is_available()
+                ) as prof:
+                    output = readformer(model_input, positions)
+                    output = classifier(output)
 
-                output = readformer(model_input, positions)
-                output = classifier(output)
+                    batch_accuracy = mlm_accuracy(output, nucleotide_sequences)
 
-                batch_accuracy = mlm_accuracy(output, nucleotide_sequences)
+                    # Main model loss and optimisation
+                    loss = loss_fn(
+                        output[valid_mask],
+                        nucleotide_sequences[valid_mask]
+                    )
 
-                # Main model loss and optimisation
-                loss = loss_fn(
-                    output[valid_mask],
-                    nucleotide_sequences[valid_mask]
-                )
+                    optimiser.zero_grad()
+                    loss.backward()
 
-                optimiser.zero_grad()
-                loss.backward()
+                    if torch.cuda.is_available():
+                        torch.cuda.synchronize()
 
+                    # torch.nn.utils.clip_grad_norm_(readformer.parameters(), max_norm=1)
+                    optimiser.step()
+
+                    if torch.cuda.is_available():
+                        torch.cuda.synchronize()
+
+            if profile_batch:
                 if torch.cuda.is_available():
-                    torch.cuda.synchronize()
-
-                torch.nn.utils.clip_grad_norm_(readformer.parameters(), max_norm=1)
-                optimiser.step()
-
-                if torch.cuda.is_available():
-                    torch.cuda.synchronize()
+                    profile_data = prof.key_averages().table(
+                        sort_by="cuda_time_total"
+                    )
+                else:
+                    profile_data = prof.key_averages().table(
+                        sort_by="cpu_time_total"
+                    )
 
             logging.debug(f"Loss at iteration {i}: {loss.item()}")
 
@@ -531,6 +566,9 @@ def main():
                         "corruption_rate": corruption_rates[j]
                     }
                 )
+                if profile_batch:
+                    wandb.log({"profile_data": wandb.Html(profile_data)})
+
             epoch_losses.append(loss.item())
             scheduler.step()
 
@@ -547,7 +585,7 @@ def main():
                         }
                     )
 
-                if epoch % 10 == 0 and mean_loss < best_mean_loss:
+                if i % 10 == 0 and mean_loss < best_mean_loss:
                     torch.save({
                         'epoch': epoch,
                         'model_state_dict': readformer.state_dict(),
