@@ -13,7 +13,7 @@ DATA_DIR="/lustre/scratch126/casm/team274sb/lp23/readformer/data/pretrain_bams"
 METADATA_PATH="/lustre/scratch126/casm/team274sb/lp23/readformer/data/one_sample_metadata.csv"
 MODEL_DIR="/lustre/scratch126/casm/team274sb/lp23/readformer/models"
 GPU_MEMORY=40960
-MEMORY=16384
+MEMORY=32768
 CORES=4
 NUM_ORDER=4
 NUM_LAYERS=2
@@ -52,7 +52,7 @@ for scale in "${SCALES[@]}"; do
 #BSUB -M ${MEMORY}
 #BSUB -n ${CORES}
 #BSUB -gpu "num=1:mode=exclusive_process:j_exclusive=yes:block=yes:gmem=${GPU_MEMORY}"
-#BSUB -R 'span[ptile=${CORES}]'  # Allocate 4 CPU cores per node
+#BSUB -R 'span[hosts=1] span[ptile=${CORES}]'  # Allocate 4 CPU cores per node
 #BSUB -R "select[mem>${MEMORY}] rusage[mem=${MEMORY}]" # span[hosts=1]"
 #BSUB -W 6:00
 
@@ -88,7 +88,6 @@ singularity exec --nv \
     --corruption_scale ${CORRUPTION_SCALE} \
     --name ${NAME} \
     --wandb \
-    --logging DEBUG \
     --profiling
 
 EOF
