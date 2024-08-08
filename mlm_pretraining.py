@@ -535,13 +535,15 @@ def main():
                     optimiser.zero_grad()
                     loss.backward()
 
-                    if torch.cuda.is_available():
+                    if (torch.cuda.is_available()
+                            and args.logging.upper() == 'DEBUG'):
                         torch.cuda.synchronize()
 
                     # torch.nn.utils.clip_grad_norm_(readformer.parameters(), max_norm=1)
                     optimiser.step()
 
-                    if torch.cuda.is_available():
+                    if (torch.cuda.is_available()
+                            and args.logging.upper() == 'DEBUG'):
                         torch.cuda.synchronize()
 
             if profile_batch:
