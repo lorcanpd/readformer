@@ -573,7 +573,7 @@ def main():
                     loss = loss_fn(
                         output[valid_mask],
                         nucleotide_sequences[valid_mask],
-                        scale_factor=interval/max_sequence_length
+                        scale_factor=1.0
                     )
 
                     optimiser.zero_grad()
