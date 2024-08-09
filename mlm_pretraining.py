@@ -13,7 +13,7 @@ from components.pretrain_utils import (
     get_replacement_mask,
     # adversarial_loss,
     create_intervals, create_corruption_rates,
-    WarmupConstantScheduler,
+    # WarmupConstantScheduler,
     mlm_accuracy
     # get_weights, check_weights
 )
@@ -149,7 +149,9 @@ def get_args():
 
 def load_checkpoint(
         model_dir, model_name, model, classifier, nucleotide_embeddings,
-        float_metric_embeddings, binary_metric_embeddings, optimiser
+        # float_metric_embeddings, binary_metric_embeddings,
+        metric_embeddings,
+        optimiser
 ):
     checkpoint_path = os.path.join(model_dir, model_name)
     if os.path.isfile(checkpoint_path):
@@ -157,8 +159,9 @@ def load_checkpoint(
         model.load_state_dict(checkpoint['model_state_dict'])
         classifier.load_state_dict(checkpoint['classifier_state_dict'])
         nucleotide_embeddings.load_state_dict(checkpoint['nucleotide_embeddings_state_dict'])
-        float_metric_embeddings.load_state_dict(checkpoint['float_metric_embeddings_state_dict'])
-        binary_metric_embeddings.load_state_dict(checkpoint['binary_metric_embeddings_state_dict'])
+        # float_metric_embeddings.load_state_dict(checkpoint['float_metric_embeddings_state_dict'])
+        # binary_metric_embeddings.load_state_dict(checkpoint['binary_metric_embeddings_state_dict'])
+        metric_embeddings.load_state_dict(checkpoint['metric_embeddings_state_dict'])
         optimiser.load_state_dict(checkpoint['optimizer_state_dict'])
         epoch = checkpoint['epoch']
         mean_loss = checkpoint['mean_loss']
@@ -633,10 +636,12 @@ def main():
                         'classifier_state_dict': classifier.state_dict(),
                         'nucleotide_embeddings_state_dict':
                             nucleotide_embeddings.state_dict(),
-                        'float_metric_embeddings_state_dict':
-                            float_metric_embeddings.state_dict(),
-                        'binary_metric_embeddings_state_dict':
-                            binary_metric_embeddings.state_dict(),
+                        'metric_embeddings_state_dict':
+                            metric_embeddings.state_dict(),
+                        # 'float_metric_embeddings_state_dict':
+                        #     float_metric_embeddings.state_dict(),
+                        # 'binary_metric_embeddings_state_dict':
+                        #     binary_metric_embeddings.state_dict(),
                         'optimiser_state_dict': optimiser.state_dict(),
                         'mean_loss': mean_loss,
                         'i': i,
