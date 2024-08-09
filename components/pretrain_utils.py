@@ -48,7 +48,7 @@ def create_intervals(max_sequence_length, min_length=256):
         interval_size *= 2
         num_intervals += 1
 
-    intervals = [(2 ** (i)) * min_length for i in range(0, num_intervals)]
+    intervals = [(2 ** (i+1)) * min_length for i in range(0, num_intervals)]
     # set last interval to the remainder of the nucleotide threshold
     intervals[-1] = max_sequence_length
     return intervals

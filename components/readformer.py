@@ -3,7 +3,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from components.hyena import (
-    HyenaProjection, HyenaFilter, FFTLongConv, FeedForward
+    HyenaProjection, HyenaFilter, FFTLongConv, FeedForward,
+    sinusoidal_positional_encoding
 )
 from components.rotary_encoding import (
     compute_theta_vector, compute_rotation_angles, apply_dimensionwise_rotation
@@ -155,7 +156,7 @@ class RotaryHyenaFilter(Module):
         super(RotaryHyenaFilter, self).__init__()
         self.emb_dim = emb_dim
         self.filter_generator = HyenaFilter(emb_dim, n_order)
-        self.theta_vector = compute_theta_vector(emb_dim)
+        # self.theta_vector = compute_theta_vector(emb_dim)
 
     def forward(self, embeddings, positions):
         """
@@ -171,10 +172,11 @@ class RotaryHyenaFilter(Module):
         # device = embeddings.device
         # self.theta_vector = self.theta_vector.to(device)
         adjusted_positions = adjust_positions(positions)
-        rotation_matrices = compute_rotation_angles(
-            adjusted_positions, self.emb_dim, self.theta_vector
-        )
-        t = apply_dimensionwise_rotation(embeddings, rotation_matrices)
+        # rotation_matrices = compute_rotation_angles(
+        #     adjusted_positions, self.emb_dim, self.theta_vector
+        # )
+        # t = apply_dimensionwise_rotation(embeddings, rotation_matrices)
+        t = sinusoidal_positional_encoding(adjusted_positions, self.emb_dim)
         filters = self.filter_generator(t)#, adjusted_positions)
 
         return filters
