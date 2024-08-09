@@ -139,6 +139,36 @@ class FeedForward(Module):
         return x
 
 
+def sinusoidal_positional_encoding(positions, emb_dim):
+    """
+    Create sinusoidal positional encodings from a tensor of positions.
+
+    Args:
+    - positions (torch.Tensor): Tensor of shape (batch_size, seq_len) with integer positions.
+    - emb_dim (int): The dimension of the positional encoding.
+
+    Returns:
+    - torch.Tensor: Sinusoidal positional encodings of shape (batch_size, seq_len, emb_dim).
+    """
+    batch_size, seq_len = positions.shape
+    # Create a tensor for the positional encodings
+    position_encodings = torch.zeros((batch_size, seq_len, emb_dim), device=positions.device)
+
+    # Compute the different angles for the sinusoidal encodings
+    position = positions.unsqueeze(-1)  # (batch_size, seq_len, 1)
+    div_term = torch.exp(
+        torch.arange(0, emb_dim, 2, device=positions.device, dtype=torch.float32) *
+        -(torch.log(torch.tensor(10000.0)) / emb_dim)
+    )
+
+    # Apply sine to even indices
+    position_encodings[:, :, 0::2] = torch.sin(position * div_term)
+    # Apply cosine to odd indices
+    position_encodings[:, :, 1::2] = torch.cos(position * div_term)
+
+    return position_encodings
+
+
 class HyenaFilter(Module):
     """
     Learns filters based on positionally transformed embeddings.

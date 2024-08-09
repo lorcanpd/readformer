@@ -227,8 +227,8 @@ class ReadwiseHyena(Module):
 
         # device = embeddings.device
         original_shape = embeddings.shape
-        self.B = self.B#.to(device)
-        self.output_projection = self.output_projection#.to(device)
+        # self.B = self.B#.to(device)
+        # self.output_projection = self.output_projection#.to(device)
 
         # Split the input embeddings into reads
         (
