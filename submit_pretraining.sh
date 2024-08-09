@@ -37,7 +37,7 @@ LAYER_NUMS=( 2 )
 NAME="6hour_testing_of_model_depth"
 
 #SCALES=( 0.5 0.75 0.9 )
-SCALE=0.75
+SCALE=0.5
 
 for NUM_LAYERS in "${LAYER_NUMS[@]}"; do
   # Set the arguments
