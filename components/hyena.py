@@ -28,7 +28,7 @@ class HyenaProjection(Module):
             groups=self.groups, padding=kernel_size//2
         )
 
-    def forward(self, inputs, positions):
+    def forward(self, inputs, positions, read_length=256):
         """
         Perform the forward pass of the Hyena projection.
 
@@ -49,6 +49,9 @@ class HyenaProjection(Module):
         z = z * (positions != -1).unsqueeze(-2).to(torch.float32)
         # Reshape z to batch_size x D x N x L
         z = z.reshape(z.size(0), self.emb_dim, self.groups, -1)
+        # pad the last dimension to the read length
+        # z = F.pad(z, (0, read_length - z.size(-1)))
+        # z = z.reshape(z.size(0), self.emb_dim, self.groups, -1)
         # Unstack the groups for separate processing
         z = z.unbind(dim=-2)
 
@@ -150,9 +153,9 @@ def sinusoidal_positional_encoding(positions, emb_dim):
     Returns:
     - torch.Tensor: Sinusoidal positional encodings of shape (batch_size, seq_len, emb_dim).
     """
-    batch_size, seq_len = positions.shape
+    seq_len = positions.shape[0]
     # Create a tensor for the positional encodings
-    position_encodings = torch.zeros((batch_size, seq_len, emb_dim), device=positions.device)
+    position_encodings = torch.zeros((seq_len, emb_dim), device=positions.device)
 
     # Compute the different angles for the sinusoidal encodings
     position = positions.unsqueeze(-1)  # (batch_size, seq_len, 1)
@@ -162,9 +165,9 @@ def sinusoidal_positional_encoding(positions, emb_dim):
     )
 
     # Apply sine to even indices
-    position_encodings[:, :, 0::2] = torch.sin(position * div_term)
+    position_encodings[:, 0::2] = torch.sin(position * div_term)
     # Apply cosine to odd indices
-    position_encodings[:, :, 1::2] = torch.cos(position * div_term)
+    position_encodings[:, 1::2] = torch.cos(position * div_term)
 
     return position_encodings
 
@@ -191,7 +194,7 @@ class HyenaFilter(Module):
             torch.full((n_order, 1, 1), 10.0)
         )
 
-    def forward(self, positional_encodings):#, positions=None):
+    def forward(self, positional_encodings, batch_size):#, positions=None):
         """
         Perform the forward pass to compute the filters.
 
@@ -239,8 +242,8 @@ class HyenaFilter(Module):
 
         h_hat = h_hat * (gaussian_windows + 0.01)
 
-        # Split h_hat into h1, h2, ..., hN
-        filters = h_hat.unbind(dim=-3)
+        # Expand to batchsize and then split h_hat into h1, h2, ..., hN
+        filters = h_hat.expand(batch_size, -1, -1, -1).unbind(dim=-3)
 
         return filters
 
@@ -270,7 +273,7 @@ class FFTLongConv(Module):
         padded_length = 2 * L  # Double the length for FFT
         # Pad the inputs and filters
         inputs = F.pad(inputs, (0, padded_length - L))
-        filters = F.pad(filters, (0, padded_length - L))
+        filters = F.pad(filters[..., :L], (0, padded_length - L))
         # Perform FFT
         inputs = torch.fft.rfft(
             inputs, n=padded_length, dim=-1, norm='forward'
@@ -285,7 +288,7 @@ class FFTLongConv(Module):
             inputs, n=padded_length, dim=-1, norm='forward'
         )
         # Remove padding
-        result = result[..., :L]
+        result = result[..., :positions.shape[-1]]
         # Zero out the padded positions. These positions do not represent
         # nucleotides and should not contribute to the convolution result.
         return result * (positions != -1).unsqueeze(-2).to(torch.float32)

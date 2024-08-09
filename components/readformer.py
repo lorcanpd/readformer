@@ -156,9 +156,16 @@ class RotaryHyenaFilter(Module):
         super(RotaryHyenaFilter, self).__init__()
         self.emb_dim = emb_dim
         self.filter_generator = HyenaFilter(emb_dim, n_order)
+        # Range from 0 to 256-1
+        self.positions = torch.arange(0, 256).to(torch.float32)
         # self.theta_vector = compute_theta_vector(emb_dim)
+        self.t = nn.Parameter(
+            sinusoidal_positional_encoding(self.positions, self.emb_dim),
+            requires_grad=False
+        )
 
-    def forward(self, embeddings, positions):
+    # def forward(self, embeddings, positions):
+    def forward(self, batch_size):
         """
         Perform the forward pass to compute the filters.
 
@@ -171,13 +178,17 @@ class RotaryHyenaFilter(Module):
         """
         # device = embeddings.device
         # self.theta_vector = self.theta_vector.to(device)
-        adjusted_positions = adjust_positions(positions)
+        # adjusted_positions = adjust_positions(positions)
+
+        # Expand positions to match the batch size
+
         # rotation_matrices = compute_rotation_angles(
         #     adjusted_positions, self.emb_dim, self.theta_vector
         # )
         # t = apply_dimensionwise_rotation(embeddings, rotation_matrices)
-        t = sinusoidal_positional_encoding(adjusted_positions, self.emb_dim)
-        filters = self.filter_generator(t)#, adjusted_positions)
+        # t = sinusoidal_positional_encoding(self.positions, self.emb_dim)
+        # breakpoint()
+        filters = self.filter_generator(self.t, batch_size)
 
         return filters
 
@@ -236,9 +247,9 @@ class ReadwiseHyena(Module):
         ) = split_into_reads(embeddings, positions)
 
         # padding = where read_positions are -1 for an element
-        not_padded = read_positions != -1
+        # not_padded = read_positions != -1
         *x, v = self.projection(read_embeddings, read_positions)
-        filters = self.filter(read_embeddings, read_positions)
+        filters = self.filter(read_embeddings.shape[0])
 
 
         for i, x_i in enumerate(x):

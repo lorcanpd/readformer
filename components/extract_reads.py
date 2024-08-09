@@ -175,7 +175,7 @@ def decode_binary_flags_to_vector(flags, num_flags=12):
         standard SAM flags).
 
     :return binary_vector: A list of integers (1 or 0) representing the binary
-        feature vectors. The elemnents represent, in order, the following
+        feature vectors. The elements represent, in order, the following
         features:
             - 0: read paired
             - 1: read mapped in proper pair

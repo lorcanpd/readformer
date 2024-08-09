@@ -324,19 +324,30 @@ def main():
 
         config = wandb.config
 
-    # Good model.
+    # base_qualities = batch['base_qualities'].to(device)
+    # read_qualities = batch['read_qualities'].to(device)
+    # cigar_match = batch['cigar_match'].to(device)
+    # cigar_insertion = batch['cigar_insertion'].to(device)
+    # bitwise_flags = batch['bitwise_flags'].to(device)
+    #
+    # len(["nucleotides", "base_quality", "read_quality", "cigar_match", "cigar_insertion", "bitwise_flags"])
+
     nucleotide_embeddings = NucleotideEmbeddingLayer(
-        emb_dim, mlm_mode=True
+        emb_dim // 2, mlm_mode=True
     ).apply(init_weights).to(device)
-    float_metric_embeddings = MetricEmbedding(
-        # emb_dim // 2,
-        emb_dim,
-        name='float', num_metrics=2
-    ).apply(init_weights).to(device)
-    binary_metric_embeddings = MetricEmbedding(
-        # emb_dim // 2,
-        emb_dim,
-        name='binary', num_metrics=14
+    # float_metric_embeddings = MetricEmbedding(
+    #     # emb_dim // 2,
+    #     emb_dim // 4,
+    #     name='float', num_metrics=2
+    # ).apply(init_weights).to(device)
+    # binary_metric_embeddings = MetricEmbedding(
+    #     # emb_dim // 2,
+    #     emb_dim // 4,
+    #     name='binary', num_metrics=14
+    # ).apply(init_weights).to(device)
+    metric_embeddings = MetricEmbedding(
+        emb_dim // 2,
+        name='metric', num_metrics=16
     ).apply(init_weights).to(device)
 
     readformer = Model(
@@ -358,20 +369,21 @@ def main():
 
     params = (
             list(nucleotide_embeddings.parameters()) +
-            list(float_metric_embeddings.parameters()) +
-            list(binary_metric_embeddings.parameters()) +
+            # list(float_metric_embeddings.parameters()) +
+            # list(binary_metric_embeddings.parameters()) +
+            list(metric_embeddings.parameters()) +
             list(readformer.parameters()) +
             list(classifier.parameters())
     )
     optimiser = torch.optim.Adam(
         params, lr=main_lr,
     )
-    scheduler = WarmupConstantScheduler(
-        optimizer=optimiser, warmup=iters_in_epoch * warm_up_epochs,
-        base_lr=main_lr
-    )
+    # scheduler = WarmupConstantScheduler(
+    #     optimizer=optimiser, warmup=iters_in_epoch * warm_up_epochs,
+    #     base_lr=main_lr
+    # )
     # Skip the lr = 0 at the start.q
-    scheduler.step()
+    # scheduler.step()
 
     loss_fn = MLMLoss()
 
@@ -395,8 +407,11 @@ def main():
     if args.load_latest_checkpoint:
         epoch, best_mean_loss, i, j = load_checkpoint(
             args.model_dir, args.name, readformer, classifier,
-            nucleotide_embeddings, float_metric_embeddings,
-            binary_metric_embeddings, optimiser
+            nucleotide_embeddings,
+            # float_metric_embeddings,
+            # binary_metric_embeddings,
+            metric_embeddings,
+            optimiser
         )
         if epoch is None:
             logging.info("No checkpoint found. Training from scratch.")
@@ -449,19 +464,37 @@ def main():
                 mask_token_mask = all_replaced & ~random_mask
 
                 # Get the binary metric embeddings
-                float_metrics = torch.stack(
-                    [base_qualities, read_qualities], dim=-1
-                ).detach()
-                binary_vec = torch.cat(
+                # float_metrics = torch.stack(
+                #     [base_qualities, read_qualities], dim=-1
+                # ).detach()
+                # binary_vec = torch.cat(
+                #     [
+                #         bitwise_flags,
+                #         torch.stack([cigar_match, cigar_insertion], dim=-1)
+                #     ],
+                #     dim=-1
+                # ).float().detach()
+                metrics = torch.cat(
                     [
-                        bitwise_flags,
-                        torch.stack([cigar_match, cigar_insertion], dim=-1)
+                        base_qualities.unsqueeze(-1),
+                        read_qualities.unsqueeze(-1),
+                        cigar_match.unsqueeze(-1),
+                        cigar_insertion.unsqueeze(-1),
+                        bitwise_flags
                     ],
                     dim=-1
-                ).float().detach()
+                )
 
-                metric_emb = float_metric_embeddings(
-                    float_metrics) + binary_metric_embeddings(binary_vec)
+                # metric_emb = torch.cat(
+                #     [
+                #         float_metric_embeddings(float_metrics),
+                #         binary_metric_embeddings(binary_vec)
+                #     ],
+                #     dim=-1
+                # )
+                metric_emb = metric_embeddings(metrics)
+                # metric_emb = float_metric_embeddings(
+                #     float_metrics) + binary_metric_embeddings(binary_vec)
                 # Get as many masked embeddings as there are replacement positions
                 masked_sequence = nucleotide_sequences.clone()#.to(device)
                 # apply the mask token to the masked positions
@@ -512,8 +545,14 @@ def main():
                 # plot_aligned_sequences(original_sequence, masked_seq, random_replaced_seq, mask_token_mask, random_mask, positions)
 
                 masked_nucleotide_emb = nucleotide_embeddings(masked_sequence)
-                model_input = masked_nucleotide_emb + metric_emb * (
-                    ~mask_token_mask).float().unsqueeze(-1)
+                # model_input = masked_nucleotide_emb + metric_emb * (
+                #     ~mask_token_mask).float().unsqueeze(-1)
+                model_input = torch.cat(
+                    [
+                        masked_nucleotide_emb,
+                        metric_emb * (~mask_token_mask).float().unsqueeze(-1)
+                    ], dim=-1
+                )
 
                 # Get the output from the model
                 # Profile every 10th batch
@@ -563,7 +602,7 @@ def main():
                     {
                         "loss": loss.item(), "iteration": i,
                         "batch_accuracy": batch_accuracy,
-                        "lr": scheduler.get_last_lr()[0],
+                        # "lr": scheduler.get_last_lr()[0],
                         "interval": intervals[j],
                         "corruption_rate": corruption_rates[j]
                     }
@@ -572,7 +611,7 @@ def main():
                     wandb.log({"profile_data": wandb.Html(profile_data)})
 
             epoch_losses.append(loss.item())
-            scheduler.step()
+            # scheduler.step()
 
             i += 1
 

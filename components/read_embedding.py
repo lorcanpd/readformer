@@ -80,8 +80,13 @@ class MetricEmbedding(Module):
             nn.init.kaiming_normal_(torch.empty(num_metrics, embedding_dim))
         )
 
+        self.bias = nn.Parameter(torch.zeros(embedding_dim))
+        self.activation = nn.ReLU()
+
     def forward(self, inputs):
-        return torch.matmul(inputs, self.embedding_matrix)
+        return self.activation(
+            torch.matmul(inputs, self.embedding_matrix).add(self.bias)
+        )
 
 
 class NucleotideEmbeddingLayer(Module):
