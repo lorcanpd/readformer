@@ -259,7 +259,7 @@ class MLMLoss(Module):
         super(MLMLoss, self).__init__()
         self.loss_fn = nn.CrossEntropyLoss()
 
-    def forward(self, logits, target):
+    def forward(self, logits, target, scale_factor=1.0):
         """
         Compute the MLM loss.
 
@@ -267,6 +267,9 @@ class MLMLoss(Module):
             Predicted logits of shape (batch_size, seq_length, num_classes).
         :param target:
             True indices of shape (batch_size, seq_length).
+        :param scale_factor:
+            Scaling factor for the loss. Use this to make loss stable when using
+            curriculum learning. Default is 1.0.
         :returns:
             Scalar loss value.
         """
@@ -283,7 +286,7 @@ class MLMLoss(Module):
         ).squeeze(-1)
 
         # Calculate the negative log-likelihood loss
-        nll_loss = -torch.log(true_probs).mean()
+        nll_loss = -torch.log(true_probs).sum() * scale_factor
 
         # with torch.no_grad():
         #     pred_probs = F.softmax(logits_flat, dim=-1)

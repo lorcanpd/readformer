@@ -428,7 +428,8 @@ def main():
             file_paths=data_dir,
             metadata_path=metadata_path,
             nucleotide_threshold=interval,
-            max_sequence_length=max_sequence_length,
+            # max_sequence_length=max_sequence_length,
+            max_sequence_length=interval,
             batch_size=batch_size,
             min_quality=min_read_quality,
             shuffle=True,
@@ -571,7 +572,8 @@ def main():
                     # Main model loss and optimisation
                     loss = loss_fn(
                         output[valid_mask],
-                        nucleotide_sequences[valid_mask]
+                        nucleotide_sequences[valid_mask],
+                        scale_factor=interval/max_sequence_length
                     )
 
                     optimiser.zero_grad()
