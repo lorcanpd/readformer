@@ -255,10 +255,12 @@ class ReadwiseHyena(Module):
         for i, x_i in enumerate(x):
             # Multiply filter by not_padded to zero out the padded positions.
             h_i = filters[i]
-            v = x_i * (v * self.B[i] + self.fft_long_conv(v, h_i, read_positions))
+            # v = x_i * (v * self.B[i] + self.fft_long_conv(v, h_i, read_positions))
+            v = v + (x_i * self.fft_long_conv(v, h_i, self.B[i], read_positions))
 
         # Transpose v to shape (batch_size, seq_len, emb_dim)
         v = v.transpose(2, 1)
+
 
         hyena_out = v.matmul(self.output_projection)
 
@@ -302,7 +304,7 @@ class PositionwiseSelfAttention(Module):
 
 class ReadformerBlock(Module):
 
-    def __init__(self, emb_dim, n_order, kernel_size):
+    def __init__(self, emb_dim, n_order, kernel_size, dropout=0.1):
         super(ReadformerBlock, self).__init__()
         self.layer_norm_1 = nn.LayerNorm(emb_dim)
         self.hyena = ReadwiseHyena(emb_dim, n_order, kernel_size)
@@ -316,26 +318,31 @@ class ReadformerBlock(Module):
         self.feed_forward_2 = FeedForward(
             emb_dim, hidden_dim=emb_dim, activation="mish"
         )
+        self.dropout = nn.Dropout(dropout)
 
     def forward(self, embeddings, positions):
         # Apply layer normalisation
         hyena_input = self.layer_norm_1(embeddings)
         # Update nucleotide embeddings using intra-read information and add
         # residual connection.
-        hyena_out = self.hyena(hyena_input, positions) + embeddings
+        hyena_out = self.dropout(
+            self.hyena(hyena_input, positions)
+        ) + embeddings
         ffn_1_input = self.layer_norm_2(hyena_out)
 
-        ffn_1_out = self.feed_forward_1(ffn_1_input) + hyena_out
+        ffn_1_out = self.dropout(self.feed_forward_1(ffn_1_input)) + hyena_out
 
         self_attention_input = self.layer_norm_3(ffn_1_out)
         # Update nucleotide embeddings using inter-read information
         # position-wise.
-        self_attention_out = self.self_attention(
-            self_attention_input, positions
+        self_attention_out = self.dropout(
+            self.self_attention(self_attention_input, positions)
         ) + ffn_1_out
         # Apply layer normalisation.
         ffn_2_input = self.layer_norm_4(self_attention_out)
         # Apply feed-forward layer and add residual connection.
-        output = self.feed_forward_2(ffn_2_input) + self_attention_out
+        output = self.dropout(
+            self.feed_forward_2(ffn_2_input)
+        ) + self_attention_out
 
         return output

@@ -50,13 +50,14 @@ class Model(nn.Module):
     """
     def __init__(
             self, emb_dim, num_layers, readformer=True, kernel_size=3, heads=8,
-            n_order=4
+            n_order=4, dropout=0.1
     ):
         super(Model, self).__init__()
         self.emb_dim = emb_dim
         self.heads = heads
         self.num_layers = num_layers
         self.kernel_size = kernel_size
+        self.dropout = nn.Dropout(dropout)
 
         if readformer:
             self.layers = nn.ModuleList(
@@ -88,6 +89,7 @@ class Model(nn.Module):
         :returns:
             Output tensor after passing through all transformer blocks.
         """
+        x = self.dropout(x)
         for layer in self.layers:
             x = layer(x, positions)
 

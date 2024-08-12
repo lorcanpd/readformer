@@ -242,10 +242,7 @@ class HyenaFilter(Module):
         # Bias prevents zero values outside the window.
         h_hat = h_hat * (weighted_gaussian_windows + self.bias)
 
-        # Expand to batch size and then split h_hat into h1, h2, ..., hN
-
-        # filters = h_hat.expand(batch_size, -1, -1, -1).unbind(dim=-3)
-
+        # Split h_hat into h1, h2, ..., hN
         return h_hat.unbind(dim=-3)
 
 
@@ -257,7 +254,7 @@ class FFTLongConv(Module):
     def __init__(self):
         super(FFTLongConv, self).__init__()
 
-    def forward(self, inputs, filters, positions):
+    def forward(self, inputs, filters, bias, positions):
         """
         Perform the forward pass of the FFT-based long convolution.
 
@@ -273,23 +270,23 @@ class FFTLongConv(Module):
         L = inputs.size(-1)
         padded_length = 2 * L  # Double the length for FFT
         # Pad the inputs and filters
-        inputs = F.pad(inputs, (0, padded_length - L))
+        padded_inputs = F.pad(inputs, (0, padded_length - L))
         filters = F.pad(filters[..., :L], (0, padded_length - L))
         # Perform FFT
-        inputs = torch.fft.rfft(
-            inputs, n=padded_length, dim=-1, norm='forward'
+        padded_inputs = torch.fft.rfft(
+            padded_inputs, n=padded_length, dim=-1, norm='forward'
         )
         filters = torch.fft.rfft(
             filters, n=padded_length, dim=-1, norm='forward'
         )
         # Element-wise multiplication in the frequency domain
-        inputs.mul_(filters)
+        padded_inputs.mul_(filters)
         # Inverse FFT to get the convolution result
         result = torch.fft.irfft(
-            inputs, n=padded_length, dim=-1, norm='forward'
+            padded_inputs, n=padded_length, dim=-1, norm='forward'
         )
         # Remove padding
-        result = result[..., :positions.shape[-1]]
+        result = result[..., :positions.shape[-1]] + inputs + bias
         # Zero out the padded positions. These positions do not represent
         # nucleotides and should not contribute to the convolution result.
         return result * (positions != -1).unsqueeze(-2).to(torch.float32)
