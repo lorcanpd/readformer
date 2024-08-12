@@ -297,12 +297,12 @@ def plot_aligned_sequences(original_sequences, masked_sequences, replaced_sequen
 
 def visualise_gaussians(hyena_filter, seq_length=None):
     """
-    Visualise the Gaussian windows learned by the HyenaFilter model.
+    Visualise the combined Gaussian windows learned by the HyenaFilter model.
 
     :param hyena_filter:
         An instance of the HyenaFilter class.
     :param seq_length:
-        The sequence length for visualization. If None, use
+        The sequence length for visualisation. If None, use
         hyena_filter.max_seq_length.
     """
     if seq_length is None:
@@ -312,18 +312,23 @@ def visualise_gaussians(hyena_filter, seq_length=None):
 
     mu = hyena_filter.mu.detach().cpu().numpy() * seq_length
     sigma = hyena_filter.sigma.detach().cpu().numpy()
+    weights = hyena_filter.weights.detach().cpu().numpy()
 
+    # Compute the Gaussian windows
     gaussian_windows = np.exp(-0.5 * ((positions - mu) / sigma) ** 2)
+
+    # Combine the Gaussians using the weights
+    weighted_gaussian_windows = (gaussian_windows * weights).sum(axis=1)
 
     for i in range(hyena_filter.n_order):
         plt.plot(
-            positions.flatten(), gaussian_windows[i, 0, :].flatten(),
+            positions.flatten(), weighted_gaussian_windows[i, 0, :].flatten(),
             label=f'Order {i + 1}'
         )
 
     plt.xlabel('Position')
     plt.ylabel('Gaussian Value')
-    plt.title('Learned Gaussian Windows')
+    plt.title('Combined Mixture of Gaussians for Each Order')
     plt.legend()
     plt.show()
 

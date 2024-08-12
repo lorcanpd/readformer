@@ -180,19 +180,26 @@ class HyenaFilter(Module):
     :param n_order: Number of orders for the filter.
     """
 
-    def __init__(self, emb_dim, n_order, max_seq_length=256):
+    def __init__(self, emb_dim, n_order, max_seq_length=256, k_gaussians=10, bias=1e-5):
         super(HyenaFilter, self).__init__()
         self.emb_dim = emb_dim
         self.n_order = n_order
         self.max_seq_length = max_seq_length
         self.ffn = FeedForward(emb_dim, n_order=n_order, activation='sine')
+        self.extra_layer = nn.Linear(
+            emb_dim * n_order, emb_dim * n_order, bias=False
+        )
+        self.K = k_gaussians
+
         self.epsilon = 1e-8  # Small value to avoid division by zero
         # self.seq_length = max_seq_length
-        # Initialise the Gaussian window parameters
-        self.mu = nn.Parameter(torch.rand(n_order, 1, 1))
-        self.sigma = nn.Parameter(
-            torch.full((n_order, 1, 1), 10.0)
-        )
+
+        # Initialize the Gaussian mixture parameters
+        # mu and sigma will have dimensions (n_order, K, 1, 1)
+        self.mu = nn.Parameter(torch.rand(n_order, self.K, 1, 1))
+        self.sigma = nn.Parameter(torch.rand(n_order, self.K, 1, 1) * 20.0)
+        self.weights = nn.Parameter(torch.rand(n_order, self.K, 1, 1))
+        self.bias = bias
 
     def forward(self, positional_encodings, batch_size):#, positions=None):
         """
@@ -206,6 +213,7 @@ class HyenaFilter(Module):
             seq_length).
         """
         h_hat = self.ffn(positional_encodings)
+        h_hat = torch.sin(self.extra_layer(h_hat))
         # Reshape h_hat from batch_size x L x ND to batch_size x L x N x D
         h_hat = h_hat.view(
             h_hat.size(0), h_hat.size(1), self.n_order, self.emb_dim
@@ -218,34 +226,27 @@ class HyenaFilter(Module):
         # # # Apply each orders' Gaussian window to their respective filters
         seq_length = h_hat.size(-1)
 
-        # if positions is None:
-        # positions = torch.arange(
-        #     # self.seq_length, device=h_hat.device
-        #     seq_length
-        # ).float().view(1, 1, 1, -1)
         positions = torch.arange(
             seq_length
         ).float().view(1, 1, -1).to(positional_encodings.device)
 
-        # gaussian_windows = torch.exp(
-        #     -0.5 * (
-        #             (
-        #                     positions - self.mu * seq_length
-        #             ).permute(2, 1, 0, 3) / self.sigma
-        #     ) ** 2)#.to(h_hat.device)
-
         gaussian_windows = torch.exp(
             -0.5 * (
-                    (positions - self.mu * self.max_seq_length) / self.sigma
-            ) ** 2)
+                (positions - self.mu * self.max_seq_length) / self.sigma
+            ) ** 2
+        )
+        weighted_gaussian_windows = (
+                gaussian_windows * self.weights
+        ).sum(dim=1)
+
         # Bias prevents zero values outside the window.
+        h_hat = h_hat * (weighted_gaussian_windows + self.bias)
 
-        h_hat = h_hat * (gaussian_windows + 0.01)
+        # Expand to batch size and then split h_hat into h1, h2, ..., hN
 
-        # Expand to batchsize and then split h_hat into h1, h2, ..., hN
-        filters = h_hat.expand(batch_size, -1, -1, -1).unbind(dim=-3)
+        # filters = h_hat.expand(batch_size, -1, -1, -1).unbind(dim=-3)
 
-        return filters
+        return h_hat.unbind(dim=-3)
 
 
 class FFTLongConv(Module):

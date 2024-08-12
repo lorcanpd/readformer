@@ -307,9 +307,13 @@ class ReadformerBlock(Module):
         self.layer_norm_1 = nn.LayerNorm(emb_dim)
         self.hyena = ReadwiseHyena(emb_dim, n_order, kernel_size)
         self.layer_norm_2 = nn.LayerNorm(emb_dim)
-        self.self_attention = PositionwiseSelfAttention(emb_dim, 8)
+        self.feed_forward_1 = FeedForward(
+            emb_dim, hidden_dim=emb_dim, activation="mish"
+        )
         self.layer_norm_3 = nn.LayerNorm(emb_dim)
-        self.feed_forward = FeedForward(
+        self.self_attention = PositionwiseSelfAttention(emb_dim, 8)
+        self.layer_norm_4 = nn.LayerNorm(emb_dim)
+        self.feed_forward_2 = FeedForward(
             emb_dim, hidden_dim=emb_dim, activation="mish"
         )
 
@@ -319,16 +323,19 @@ class ReadformerBlock(Module):
         # Update nucleotide embeddings using intra-read information and add
         # residual connection.
         hyena_out = self.hyena(hyena_input, positions) + embeddings
-        # Apply layer normalisation.
-        self_attention_input = self.layer_norm_2(hyena_out)
+        ffn_1_input = self.layer_norm_2(hyena_out)
+
+        ffn_1_out = self.feed_forward_1(ffn_1_input) + hyena_out
+
+        self_attention_input = self.layer_norm_3(ffn_1_out)
         # Update nucleotide embeddings using inter-read information
         # position-wise.
         self_attention_out = self.self_attention(
             self_attention_input, positions
-        ) + hyena_out
+        ) + ffn_1_out
         # Apply layer normalisation.
-        ffn_input = self.layer_norm_3(self_attention_out)
+        ffn_2_input = self.layer_norm_4(self_attention_out)
         # Apply feed-forward layer and add residual connection.
-        output = self.feed_forward(ffn_input) + self_attention_out
+        output = self.feed_forward_2(ffn_2_input) + self_attention_out
 
         return output

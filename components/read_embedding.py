@@ -119,7 +119,6 @@ class NucleotideEmbeddingLayer(Module):
         :return:
             The corresponding nucleotide embeddings.
         """
-        # breakpoint()
         embeddings = self.embedding(inputs)
         # Mask the padding indices with zero vectors
         mask = (inputs != self.padding_idx).unsqueeze(-1).float()
