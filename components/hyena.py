@@ -142,7 +142,7 @@ class FeedForward(Module):
         return x
 
 
-def sinusoidal_positional_encoding(positions, emb_dim):
+def sinusoidal_positional_encoding(positions, emb_dim, max_seq_length=256):
     """
     Create sinusoidal positional encodings from a tensor of positions.
 
@@ -161,7 +161,7 @@ def sinusoidal_positional_encoding(positions, emb_dim):
     position = positions.unsqueeze(-1)  # (batch_size, seq_len, 1)
     div_term = torch.exp(
         torch.arange(0, emb_dim, 2, device=positions.device, dtype=torch.float32) *
-        -(torch.log(torch.tensor(10000.0)) / emb_dim)
+        -(torch.log(torch.tensor(max_seq_length * 2.0)) / emb_dim)
     )
 
     # Apply sine to even indices
@@ -180,15 +180,16 @@ class HyenaFilter(Module):
     :param n_order: Number of orders for the filter.
     """
 
-    def __init__(self, emb_dim, n_order, max_seq_length=256, k_gaussians=10, bias=1e-5):
+    def __init__(self, emb_dim, n_order, max_seq_length=256, k_gaussians=10, bias=1e-6):
         super(HyenaFilter, self).__init__()
         self.emb_dim = emb_dim
         self.n_order = n_order
         self.max_seq_length = max_seq_length
         self.ffn = FeedForward(emb_dim, n_order=n_order, activation='sine')
-        self.extra_layer = nn.Linear(
-            emb_dim * n_order, emb_dim * n_order, bias=False
+        self.group_weight = nn.Parameter(
+            torch.randn(n_order, emb_dim, emb_dim)
         )
+        self.group_bias = nn.Parameter(torch.zeros(n_order, emb_dim))
         self.K = k_gaussians
 
         self.epsilon = 1e-8  # Small value to avoid division by zero
@@ -212,33 +213,27 @@ class HyenaFilter(Module):
             List of n_order filters, each of shape (batch_size, emb_dim,
             seq_length).
         """
-        h_hat = self.ffn(positional_encodings)
-        h_hat = torch.sin(self.extra_layer(h_hat))
-        # Reshape h_hat from batch_size x L x ND to batch_size x L x N x D
-        h_hat = h_hat.view(
-            h_hat.size(0), h_hat.size(1), self.n_order, self.emb_dim
+        h_hat = torch.sin(self.ffn(positional_encodings)).view(
+            positional_encodings.size(0), self.n_order, self.emb_dim
         )
-        # Reshape to batch_size x N x D x L
-        h_hat = h_hat.permute(0, 2, 3, 1)
+        h_hat = torch.einsum(
+            'bni,nij->bnj', h_hat, self.group_weight
+        ) + self.group_bias
+        # Reorder to  N x D x L
+        h_hat = h_hat.permute(1, 2, 0)
         # Normalize h_hat along the channel dimension D
         h_hat = h_hat / (h_hat.norm(p=1, dim=-2, keepdim=True) + self.epsilon)
-
-        # # # Apply each orders' Gaussian window to their respective filters
+        # Apply each orders' Gaussian window to their respective filters
         seq_length = h_hat.size(-1)
-
-        positions = torch.arange(
-            seq_length
-        ).float().view(1, 1, -1).to(positional_encodings.device)
-
+        positions = torch.arange(seq_length).float().view(1, 1, -1).to(
+            positional_encodings.device
+        )
         gaussian_windows = torch.exp(
             -0.5 * (
-                (positions - self.mu * self.max_seq_length) / self.sigma
+                    (positions - self.mu * self.max_seq_length) / self.sigma
             ) ** 2
         )
-        weighted_gaussian_windows = (
-                gaussian_windows * self.weights
-        ).sum(dim=1)
-
+        weighted_gaussian_windows = (gaussian_windows * self.weights).sum(dim=1)
         # Bias prevents zero values outside the window.
         h_hat = h_hat * (weighted_gaussian_windows + self.bias)
 
@@ -286,7 +281,7 @@ class FFTLongConv(Module):
             padded_inputs, n=padded_length, dim=-1, norm='forward'
         )
         # Remove padding
-        result = result[..., :positions.shape[-1]] + inputs + bias
+        result = result[..., :positions.shape[-1]] + inputs * bias
         # Zero out the padded positions. These positions do not represent
         # nucleotides and should not contribute to the convolution result.
         return result * (positions != -1).unsqueeze(-2).to(torch.float32)

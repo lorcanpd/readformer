@@ -13,6 +13,7 @@ from components.self_attention import MultiHeadSelfAttention
 
 from components.better_device_handling import Module
 
+
 # TODO: Create some sort of scaling vector system for rapid fine-tuning. Perhaps
 # allow full finetuning for the Hyena-based components and partial finetuning
 # for the self-attention components and feedforward.
@@ -63,8 +64,8 @@ def split_into_reads(embeddings, positions):
         ends = torch.where(segment_ends[b])[0]
         for start, end in zip(starts, ends):
             if start != end:
-                segmented_inputs.append(embeddings[b, start:end+1])
-                segmented_positions.append(positions[b, start:end+1])
+                segmented_inputs.append(embeddings[b, start:end + 1])
+                segmented_positions.append(positions[b, start:end + 1])
                 segment_starts_indices.append(start)
                 batch_indices.append(b)
                 max_seg_length = max(max_seg_length, end + 1 - start)
@@ -90,7 +91,7 @@ def reassemble_sequences(original_shape, read_tensor, positions, segment_starts,
     output = torch.zeros(original_shape, device=read_tensor.device)
 
     for processed_read, read_positions, start_idx, batch_idx in zip(
-        read_tensor, positions, segment_starts, batch_indices
+            read_tensor, positions, segment_starts, batch_indices
     ):
         read_vectors = processed_read[read_positions != -1]
         # read_positions = read_positions[read_positions != -1]
@@ -208,6 +209,7 @@ class ReadwiseHyena(Module):
     :param kernel_size:
         Size of the convolution kernel.
     """
+
     def __init__(self, emb_dim, n_order, kernel_size):
         super(ReadwiseHyena, self).__init__()
         self.n_order = n_order
@@ -223,6 +225,7 @@ class ReadwiseHyena(Module):
         self.B = nn.Parameter(
             nn.init.kaiming_uniform_(torch.randn((n_order, 1, emb_dim, 1)))
         )
+        self.dropout = nn.Dropout(0.1)
 
     def forward(self, embeddings, positions):
         """
@@ -235,12 +238,7 @@ class ReadwiseHyena(Module):
         :return:
             Output tensor of shape (batch_size, seq_length, emb_dim).
         """
-
-        # device = embeddings.device
         original_shape = embeddings.shape
-        # self.B = self.B#.to(device)
-        # self.output_projection = self.output_projection#.to(device)
-
         # Split the input embeddings into reads
         (
             read_embeddings, read_positions, start_indices, batch_indices
@@ -249,18 +247,27 @@ class ReadwiseHyena(Module):
         # padding = where read_positions are -1 for an element
         # not_padded = read_positions != -1
         *x, v = self.projection(read_embeddings, read_positions)
+        # Annotated hyena: Added skip connection
+        v = v + read_embeddings.transpose(2, 1)
         filters = self.filter(read_embeddings.shape[0])
-
 
         for i, x_i in enumerate(x):
             # Multiply filter by not_padded to zero out the padded positions.
             h_i = filters[i]
             # v = x_i * (v * self.B[i] + self.fft_long_conv(v, h_i, read_positions))
-            v = v + (x_i * self.fft_long_conv(v, h_i, self.B[i], read_positions))
+            # Annotated hyena: Added skip connection and softmax over embeddings
+            # v = v + (
+            #     torch.softmax(x_i, dim=1) * self.fft_long_conv(
+            #         v, h_i, self.B[i], read_positions
+            #     )
+            # )
+            # Safari standalone hyena:
+            # https://github.com/HazyResearch/safari/blob/02220c69d247e5473616cd053a443ad99fd2559b/standalone_hyena.py#L109
+            v = self.dropout(v * x_i)
+            v = self.fft_long_conv(v, h_i, self.B[i], read_positions)
 
         # Transpose v to shape (batch_size, seq_len, emb_dim)
         v = v.transpose(2, 1)
-
 
         hyena_out = v.matmul(self.output_projection)
 
@@ -282,7 +289,6 @@ class PositionwiseSelfAttention(Module):
         )
 
     def forward(self, embeddings, positions):
-
         embs_by_position, index_map = reshape_by_position_and_track(
             embeddings, positions
         )

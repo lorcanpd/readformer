@@ -356,7 +356,7 @@ def main():
     readformer = Model(
         emb_dim=emb_dim, heads=num_heads, num_layers=num_layers,
         readformer=readformer, kernel_size=kernel_size
-    ).apply(init_weights).to(device)
+    ).apply(init_weights).to(device).train()
 
     # Set the scaling vectors to one and freeze them.
     for layer in readformer.layers:
