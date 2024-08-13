@@ -63,7 +63,7 @@ class Model(nn.Module):
             self.layers = nn.ModuleList(
                 [
                     ReadformerBlock(
-                        emb_dim, n_order, kernel_size
+                        emb_dim, n_order, kernel_size, heads
                     )
                     for _ in range(num_layers)
                 ]

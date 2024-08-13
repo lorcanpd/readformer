@@ -355,6 +355,7 @@ def main():
 
     readformer = Model(
         emb_dim=emb_dim, heads=num_heads, num_layers=num_layers,
+        n_order=n_order,
         readformer=readformer, kernel_size=kernel_size
     ).apply(init_weights).to(device).train()
 

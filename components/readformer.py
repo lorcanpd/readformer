@@ -6,9 +6,9 @@ from components.hyena import (
     HyenaProjection, HyenaFilter, FFTLongConv, FeedForward,
     sinusoidal_positional_encoding
 )
-from components.rotary_encoding import (
-    compute_theta_vector, compute_rotation_angles, apply_dimensionwise_rotation
-)
+# from components.rotary_encoding import (
+#     compute_theta_vector, compute_rotation_angles, apply_dimensionwise_rotation
+# )
 from components.self_attention import MultiHeadSelfAttention
 
 from components.better_device_handling import Module
@@ -153,10 +153,11 @@ class RotaryHyenaFilter(Module):
         The number of long convolution filters to generate.
     """
 
-    def __init__(self, emb_dim, n_order):
+    def __init__(self, emb_dim, n_order, num_heads=4):
         super(RotaryHyenaFilter, self).__init__()
         self.emb_dim = emb_dim
-        self.filter_generator = HyenaFilter(emb_dim, n_order)
+        self.num_heads = num_heads
+        self.filter_generator = HyenaFilter(emb_dim, n_order, num_heads)
         # Range from 0 to 256-1
         self.positions = torch.arange(0, 256).to(torch.float32)
         # self.theta_vector = compute_theta_vector(emb_dim)
@@ -165,31 +166,15 @@ class RotaryHyenaFilter(Module):
             requires_grad=False
         )
 
-    # def forward(self, embeddings, positions):
-    def forward(self, batch_size):
+    def forward(self):
         """
         Perform the forward pass to compute the filters.
 
-        :param embeddings:
-            Input embeddings of shape (batch_size, seq_length, emb_dim).
-        :param positions:
-            Position tensor of shape (batch_size, seq_length).
         :return:
             List of filters, each of shape (batch_size, emb_dim, seq_length).
         """
-        # device = embeddings.device
-        # self.theta_vector = self.theta_vector.to(device)
-        # adjusted_positions = adjust_positions(positions)
 
-        # Expand positions to match the batch size
-
-        # rotation_matrices = compute_rotation_angles(
-        #     adjusted_positions, self.emb_dim, self.theta_vector
-        # )
-        # t = apply_dimensionwise_rotation(embeddings, rotation_matrices)
-        # t = sinusoidal_positional_encoding(self.positions, self.emb_dim)
-        # breakpoint()
-        filters = self.filter_generator(self.t, batch_size)
+        filters = self.filter_generator(self.t)
 
         return filters
 
@@ -197,10 +182,7 @@ class RotaryHyenaFilter(Module):
 class ReadwiseHyena(Module):
     """
     A custom, position-aware Hyena block combining projection, filter, and
-    FFT-based long convolution. Can be used as a direct replacement to
-    multi-head self-attention in a transformer. It is intended to be used in
-    applications of multiple overlapping sequences such as aligned DNA
-    sequencing reads.
+    FFT-based long convolution with multi-head support.
 
     :param emb_dim:
         Dimension of the input embeddings.
@@ -208,22 +190,23 @@ class ReadwiseHyena(Module):
         Number of orders for the block.
     :param kernel_size:
         Size of the convolution kernel.
+    :param num_heads:
+        Number of heads for multi-head processing.
     """
 
-    def __init__(self, emb_dim, n_order, kernel_size):
+    def __init__(self, emb_dim, n_order, kernel_size, num_heads=4):
         super(ReadwiseHyena, self).__init__()
         self.n_order = n_order
-        self.embedding_dim = emb_dim
-        self.kernel_size = kernel_size
-        self.projection = HyenaProjection(emb_dim, n_order, kernel_size)
-        # self.filter = HyenaFilter(emb_dim, n_order)
-        self.filter = RotaryHyenaFilter(emb_dim, n_order)
+        self.num_heads = num_heads
+        self.head_dim = emb_dim // num_heads
+        self.projection = HyenaProjection(emb_dim, n_order, kernel_size, num_heads)
+        self.filter = RotaryHyenaFilter(emb_dim, n_order, num_heads)
         self.fft_long_conv = FFTLongConv()
         self.output_projection = nn.Parameter(
             nn.init.kaiming_uniform_(torch.randn(emb_dim, emb_dim))
         )
         self.B = nn.Parameter(
-            nn.init.kaiming_uniform_(torch.randn((n_order, 1, emb_dim, 1)))
+            nn.init.kaiming_uniform_(torch.randn((n_order, 1, self.head_dim, 1)))
         )
         self.dropout = nn.Dropout(0.1)
 
@@ -232,42 +215,31 @@ class ReadwiseHyena(Module):
         Perform the forward pass of the Hyena block.
 
         :param embeddings:
-            Input embeddings of shape (batch_size, seq_length, emb_dim).
+            Input tensor of shape (batch_size, seq_length, emb_dim).
         :param positions:
             Position tensor of shape (batch_size, seq_length).
         :return:
             Output tensor of shape (batch_size, seq_length, emb_dim).
         """
+
         original_shape = embeddings.shape
         # Split the input embeddings into reads
         (
             read_embeddings, read_positions, start_indices, batch_indices
         ) = split_into_reads(embeddings, positions)
 
-        # padding = where read_positions are -1 for an element
-        # not_padded = read_positions != -1
         *x, v = self.projection(read_embeddings, read_positions)
-        # Annotated hyena: Added skip connection
-        v = v + read_embeddings.transpose(2, 1)
-        filters = self.filter(read_embeddings.shape[0])
+        # Initial residual connection
+        # v = v + embeddings.view(batch_size, embeddings.shape[1], self.num_heads, self.head_dim).transpose(2, 3)
+
+        filters = self.filter()
 
         for i, x_i in enumerate(x):
-            # Multiply filter by not_padded to zero out the padded positions.
             h_i = filters[i]
-            # v = x_i * (v * self.B[i] + self.fft_long_conv(v, h_i, read_positions))
-            # Annotated hyena: Added skip connection and softmax over embeddings
-            # v = v + (
-            #     torch.softmax(x_i, dim=1) * self.fft_long_conv(
-            #         v, h_i, self.B[i], read_positions
-            #     )
-            # )
-            # Safari standalone hyena:
-            # https://github.com/HazyResearch/safari/blob/02220c69d247e5473616cd053a443ad99fd2559b/standalone_hyena.py#L109
-            v = self.dropout(v * x_i)
             v = self.fft_long_conv(v, h_i, self.B[i], read_positions)
-
-        # Transpose v to shape (batch_size, seq_len, emb_dim)
-        v = v.transpose(2, 1)
+            v = self.dropout(v * x_i)
+        v = v.permute(0, 3, 1, 2)  # (batch_size, seq_len, num_heads, head_dim)
+        v = v.reshape(v.shape[0], v.shape[1], v.shape[2] * v.shape[3])  # Combine heads: (batch_size, seq_len, emb_dim)
 
         hyena_out = v.matmul(self.output_projection)
 
@@ -275,7 +247,6 @@ class ReadwiseHyena(Module):
             original_shape, hyena_out, read_positions, start_indices,
             batch_indices
         )
-
         return hyena_out
 
 
@@ -310,16 +281,16 @@ class PositionwiseSelfAttention(Module):
 
 class ReadformerBlock(Module):
 
-    def __init__(self, emb_dim, n_order, kernel_size, dropout=0.1):
+    def __init__(self, emb_dim, n_order, kernel_size, num_heads, dropout=0.1):
         super(ReadformerBlock, self).__init__()
         self.layer_norm_1 = nn.LayerNorm(emb_dim)
-        self.hyena = ReadwiseHyena(emb_dim, n_order, kernel_size)
+        self.hyena = ReadwiseHyena(emb_dim, n_order, kernel_size, num_heads)
         self.layer_norm_2 = nn.LayerNorm(emb_dim)
         self.feed_forward_1 = FeedForward(
             emb_dim, hidden_dim=emb_dim, activation="mish"
         )
         self.layer_norm_3 = nn.LayerNorm(emb_dim)
-        self.self_attention = PositionwiseSelfAttention(emb_dim, 8)
+        self.self_attention = PositionwiseSelfAttention(emb_dim, num_heads)
         self.layer_norm_4 = nn.LayerNorm(emb_dim)
         self.feed_forward_2 = FeedForward(
             emb_dim, hidden_dim=emb_dim, activation="mish"

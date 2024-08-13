@@ -15,7 +15,8 @@ MODEL_DIR="/lustre/scratch126/casm/team274sb/lp23/readformer/models"
 GPU_MEMORY=80000
 MEMORY=32768
 CORES=8
-NUM_ORDER=4
+NUM_ORDER=2
+NUM_HEADS=8
 KERNEL_SIZE=11
 #NUM_LAYERS=2
 MIN_READ_QUALITY=20
@@ -38,7 +39,7 @@ LAYER_NUMS=( 2 )
 NAME="6hour_testing_of_model_depth"
 
 #SCALES=( 0.5 0.75 0.9 )
-SCALE=0.5
+SCALE=0.3
 
 for NUM_LAYERS in "${LAYER_NUMS[@]}"; do
   # Set the arguments
@@ -78,6 +79,7 @@ singularity exec --nv \
     --n_order ${NUM_ORDER} \
     --kernel_size ${KERNEL_SIZE} \
     --num_layers ${NUM_LAYERS} \
+    --num_heads ${NUM_HEADS} \
     --min_read_quality ${MIN_READ_QUALITY} \
     --batch_size ${BATCH_SIZE} \
     --emb_dim ${EMB_DIM} \
