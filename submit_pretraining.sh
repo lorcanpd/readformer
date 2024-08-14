@@ -15,9 +15,9 @@ MODEL_DIR="/lustre/scratch126/casm/team274sb/lp23/readformer/models"
 GPU_MEMORY=80000
 MEMORY=32768
 CORES=8
-NUM_ORDER=2
+NUM_ORDER=3
 NUM_HEADS=8
-KERNEL_SIZE=3
+KERNEL_SIZE=5
 #NUM_LAYERS=2
 MIN_READ_QUALITY=20
 BATCH_SIZE=128
@@ -39,7 +39,7 @@ LAYER_NUMS=( 2 )
 NAME="6hour_testing_of_model_depth"
 
 #SCALES=( 0.5 0.75 0.9 )
-SCALE=0.3
+SCALE=0.2
 
 for NUM_LAYERS in "${LAYER_NUMS[@]}"; do
   # Set the arguments
