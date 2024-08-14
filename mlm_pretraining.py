@@ -159,8 +159,6 @@ def load_checkpoint(
         model.load_state_dict(checkpoint['model_state_dict'])
         classifier.load_state_dict(checkpoint['classifier_state_dict'])
         nucleotide_embeddings.load_state_dict(checkpoint['nucleotide_embeddings_state_dict'])
-        # float_metric_embeddings.load_state_dict(checkpoint['float_metric_embeddings_state_dict'])
-        # binary_metric_embeddings.load_state_dict(checkpoint['binary_metric_embeddings_state_dict'])
         metric_embeddings.load_state_dict(checkpoint['metric_embeddings_state_dict'])
         optimiser.load_state_dict(checkpoint['optimizer_state_dict'])
         epoch = checkpoint['epoch']
@@ -331,29 +329,9 @@ def main():
             "learning_rate_main": main_lr,
         })
 
-        # config = wandb.config
-
-    # base_qualities = batch['base_qualities'].to(device)
-    # read_qualities = batch['read_qualities'].to(device)
-    # cigar_match = batch['cigar_match'].to(device)
-    # cigar_insertion = batch['cigar_insertion'].to(device)
-    # bitwise_flags = batch['bitwise_flags'].to(device)
-    #
-    # len(["nucleotides", "base_quality", "read_quality", "cigar_match", "cigar_insertion", "bitwise_flags"])
-
     nucleotide_embeddings = NucleotideEmbeddingLayer(
         emb_dim // 2, mlm_mode=True
     ).apply(init_weights).to(device)
-    # float_metric_embeddings = MetricEmbedding(
-    #     # emb_dim // 2,
-    #     emb_dim // 4,
-    #     name='float', num_metrics=2
-    # ).apply(init_weights).to(device)
-    # binary_metric_embeddings = MetricEmbedding(
-    #     # emb_dim // 2,
-    #     emb_dim // 4,
-    #     name='binary', num_metrics=14
-    # ).apply(init_weights).to(device)
     metric_embeddings = MetricEmbedding(
         emb_dim // 2,
         name='metric', num_metrics=16
@@ -363,15 +341,13 @@ def main():
         emb_dim=emb_dim, heads=num_heads, num_layers=num_layers,
         n_order=n_order,
         readformer=readformer, kernel_size=kernel_size
-    ).apply(init_weights).to(device).train()
+    ).apply(init_weights).train().to(device).train()
 
-    # Set the scaling vectors to one and freeze them.
-    for layer in readformer.layers:
-        if not args.readformer:
-            layer.self_attention.init_scaling_vectors()
-            layer.self_attention.freeze_scaling_vectors()
-        # layer.feed_forward.init_scaling_vector()
-        # layer.feed_forward.freeze_scaling_vector()
+    # for layer in readformer.layers:
+    #     layer.self_attention.init_scaling_vectors()
+    #     layer.self_attention.freeze_scaling_vectors()
+    #     layer.feed_forward.init_scaling_vector()
+    #     layer.feed_forward.freeze_scaling_vector()
 
     classifier = MLMClassifier(
         emb_dim=emb_dim, num_classes=nucleotide_embeddings.padding_idx
@@ -379,8 +355,6 @@ def main():
 
     params = (
             list(nucleotide_embeddings.parameters()) +
-            # list(float_metric_embeddings.parameters()) +
-            # list(binary_metric_embeddings.parameters()) +
             list(metric_embeddings.parameters()) +
             list(readformer.parameters()) +
             list(classifier.parameters())
@@ -388,12 +362,6 @@ def main():
     optimiser = torch.optim.Adam(
         params, lr=main_lr,
     )
-    # scheduler = WarmupConstantScheduler(
-    #     optimizer=optimiser, warmup=iters_in_epoch * warm_up_epochs,
-    #     base_lr=main_lr
-    # )
-    # Skip the lr = 0 at the start.q
-    # scheduler.step()
 
     loss_fn = MLMLoss()
 
@@ -407,7 +375,6 @@ def main():
     else:
         corruption_rates = [0.2] * len(intervals)
 
-
     i = 0
     j = 0
     epoch = 0
@@ -418,8 +385,6 @@ def main():
         epoch, best_mean_loss, i, j = load_checkpoint(
             args.model_dir, args.name, readformer, classifier,
             nucleotide_embeddings,
-            # float_metric_embeddings,
-            # binary_metric_embeddings,
             metric_embeddings,
             optimiser
         )
@@ -435,7 +400,6 @@ def main():
             file_paths=data_dir,
             metadata_path=metadata_path,
             nucleotide_threshold=interval,
-            # max_sequence_length=max_sequence_length,
             max_sequence_length=interval,
             batch_size=batch_size,
             min_quality=min_read_quality,
@@ -450,114 +414,110 @@ def main():
 
             logging.debug(f"Processing batch {i} of data loader {j}")
 
+            # with device_context(device):
+            nucleotide_sequences = batch['nucleotide_sequences']#.to(device)
+            valid_mask = (
+                    nucleotide_sequences !=
+                    nucleotide_embeddings.padding_idx
+            )
+            base_qualities = batch['base_qualities']#.to(device)
+            read_qualities = batch['read_qualities']#.to(device)
+            cigar_match = batch['cigar_match']#.to(device)
+            cigar_insertion = batch['cigar_insertion']#.to(device)
+            bitwise_flags = batch['bitwise_flags']#.to(device)
+            positions = batch['positions']#.to(device)
+
+            # Identify the positions to corrupt
+            all_replaced = get_replacement_mask(
+                positions, rate=corruption_rates[j]
+            )
+            # Select some positions to replace with random nucleotides
+            random_mask = all_replaced & (
+                torch.rand_like(all_replaced.float()) < proportion_random
+            )
+            # And other to be replaced with the mask token
+            mask_token_mask = all_replaced & ~random_mask
+
+            metrics = torch.cat(
+                [
+                    base_qualities.unsqueeze(-1),
+                    read_qualities.unsqueeze(-1),
+                    cigar_match.unsqueeze(-1),
+                    cigar_insertion.unsqueeze(-1),
+                    bitwise_flags
+                ],
+                dim=-1
+            )
+
+            # metric_emb = torch.cat(
+            #     [
+            #         float_metric_embeddings(float_metrics),
+            #         binary_metric_embeddings(binary_vec)
+            #     ],
+            #     dim=-1
+            # )
+
+            # metric_emb = float_metric_embeddings(
+            #     float_metrics) + binary_metric_embeddings(binary_vec)
+            # Get as many masked embeddings as there are replacement positions
+            masked_sequence = nucleotide_sequences.clone()#.to(device)
+            # apply the mask token to the masked positions
+            masked_sequence[
+                mask_token_mask] = nucleotide_embeddings.mask_index
+            # TODO For plotting replacements.
+            # masked_seq = masked_sequence
+            # randomise the nucleotides at the random positions
+            # num_random_replacements = random_mask.sum().item()
+            # MAke all the random replacements the same at the same position
+
+            # Flatten the positions and random_mask tensors for easier processing
+            flat_positions = positions.view(-1)
+            flat_random_mask = random_mask.view(-1)
+
+            # Filter out the unique positions where random_mask is True
+            unique_positions = flat_positions[flat_random_mask].unique()
+            unique_positions = unique_positions[unique_positions != -1]
+
+            # Generate a random nucleotide for each unique position
+            random_nucleotides = torch.randint(
+                0, 4, (unique_positions.size(0),),
+                dtype=torch.int64)
+            # Create a mapping from each position to its corresponding random
+            # nucleotide
+            position_to_random_nucleotide = dict(
+                zip(unique_positions.tolist(), random_nucleotides.tolist())
+            )
+
+            # Flatten the masked_sequence for easier processing
+            flat_masked_sequence = masked_sequence.view(-1)
+            # Replace positions in flat_masked_sequence using the mapping
+            for pos in unique_positions:
+                flat_masked_sequence[
+                    flat_positions == pos
+                    ] = position_to_random_nucleotide[pos.item()]
+
+            # Reshape the masked_sequence back to its original shape
+            masked_sequence = flat_masked_sequence.view_as(nucleotide_sequences)
+
+            # TODO For plotting replacements.
+            # Extract the first sequence for visualization
+            # original_sequence = nucleotide_sequences
+            # TODO For plotting replacements.
+            # random_replaced_seq = flat_masked_sequence.view_as(nucleotide_sequences)
+
+            # TODO For plotting replacements.
+            # plot_aligned_sequences(original_sequence, masked_seq, random_replaced_seq, mask_token_mask, random_mask, positions)
+
+            positions = positions.to(device)
+            valid_mask = valid_mask.to(device)
+            nucleotide_sequences = nucleotide_sequences.to(device)
+            masked_sequence = masked_sequence.to(device)
+            mask_token_mask = mask_token_mask.to(device)
             with device_context(device):
-                nucleotide_sequences = batch['nucleotide_sequences'].to(device)
-                valid_mask = (
-                        nucleotide_sequences !=
-                        nucleotide_embeddings.padding_idx
-                )
-                base_qualities = batch['base_qualities'].to(device)
-                read_qualities = batch['read_qualities'].to(device)
-                cigar_match = batch['cigar_match'].to(device)
-                cigar_insertion = batch['cigar_insertion'].to(device)
-                bitwise_flags = batch['bitwise_flags'].to(device)
-                positions = batch['positions'].to(device)
-
-                # Identify the positions to corrupt
-                all_replaced = get_replacement_mask(
-                    positions, rate=corruption_rates[j]
-                )
-                # Select some positions to replace with random nucleotides
-                random_mask = all_replaced & (
-                    torch.rand_like(all_replaced.float()) < proportion_random
-                )
-                # And other to be replaced with the mask token
-                mask_token_mask = all_replaced & ~random_mask
-
-                # Get the binary metric embeddings
-                # float_metrics = torch.stack(
-                #     [base_qualities, read_qualities], dim=-1
-                # ).detach()
-                # binary_vec = torch.cat(
-                #     [
-                #         bitwise_flags,
-                #         torch.stack([cigar_match, cigar_insertion], dim=-1)
-                #     ],
-                #     dim=-1
-                # ).float().detach()
-                metrics = torch.cat(
-                    [
-                        base_qualities.unsqueeze(-1),
-                        read_qualities.unsqueeze(-1),
-                        cigar_match.unsqueeze(-1),
-                        cigar_insertion.unsqueeze(-1),
-                        bitwise_flags
-                    ],
-                    dim=-1
-                )
-
-                # metric_emb = torch.cat(
-                #     [
-                #         float_metric_embeddings(float_metrics),
-                #         binary_metric_embeddings(binary_vec)
-                #     ],
-                #     dim=-1
-                # )
-                metric_emb = metric_embeddings(metrics)
-                # metric_emb = float_metric_embeddings(
-                #     float_metrics) + binary_metric_embeddings(binary_vec)
-                # Get as many masked embeddings as there are replacement positions
-                masked_sequence = nucleotide_sequences.clone()#.to(device)
-                # apply the mask token to the masked positions
-                masked_sequence[
-                    mask_token_mask] = nucleotide_embeddings.mask_index
-                # TODO For plotting replacements.
-                # masked_seq = masked_sequence
-                # randomise the nucleotides at the random positions
-                # num_random_replacements = random_mask.sum().item()
-                # MAke all the random replacements the same at the same position
-
-                # Flatten the positions and random_mask tensors for easier processing
-                flat_positions = positions.view(-1)
-                flat_random_mask = random_mask.view(-1)
-
-                # Filter out the unique positions where random_mask is True
-                unique_positions = flat_positions[flat_random_mask].unique()
-                unique_positions = unique_positions[unique_positions != -1]
-
-                # Generate a random nucleotide for each unique position
-                random_nucleotides = torch.randint(
-                    0, 4, (unique_positions.size(0),),
-                    dtype=torch.int64)
-                # Create a mapping from each position to its corresponding random
-                # nucleotide
-                position_to_random_nucleotide = dict(
-                    zip(unique_positions.tolist(), random_nucleotides.tolist())
-                )
-
-                # Flatten the masked_sequence for easier processing
-                flat_masked_sequence = masked_sequence.view(-1)
-                # Replace positions in flat_masked_sequence using the mapping
-                for pos in unique_positions:
-                    flat_masked_sequence[
-                        flat_positions == pos
-                        ] = position_to_random_nucleotide[pos.item()]
-
-                # Reshape the masked_sequence back to its original shape
-                masked_sequence = flat_masked_sequence.view_as(nucleotide_sequences)
-
-                # TODO For plotting replacements.
-                # Extract the first sequence for visualization
-                # original_sequence = nucleotide_sequences
-                # TODO For plotting replacements.
-                # random_replaced_seq = flat_masked_sequence.view_as(nucleotide_sequences)
-
-                # TODO For plotting replacements.
-                # plot_aligned_sequences(original_sequence, masked_seq, random_replaced_seq, mask_token_mask, random_mask, positions)
-
                 masked_nucleotide_emb = nucleotide_embeddings(masked_sequence)
                 # model_input = masked_nucleotide_emb + metric_emb * (
                 #     ~mask_token_mask).float().unsqueeze(-1)
+                metric_emb = metric_embeddings(metrics.to(device))
                 model_input = torch.cat(
                     [
                         masked_nucleotide_emb,
@@ -573,9 +533,7 @@ def main():
                 ) as prof:
                     output = readformer(model_input, positions)
                     output = classifier(output)
-
                     batch_accuracy = mlm_accuracy(output, nucleotide_sequences)
-
                     # Main model loss and optimisation
                     loss = loss_fn(
                         output[valid_mask],

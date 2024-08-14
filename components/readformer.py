@@ -262,8 +262,6 @@ class ReadwiseHyena(Module):
         v = v.permute(0, 3, 1, 2)  # (batch_size, seq_len, num_heads, head_dim)
         v = v.reshape(v.shape[0], v.shape[1], v.shape[2] * v.shape[3])  # Combine heads: (batch_size, seq_len, emb_dim)
 
-
-
         if self.activation is not None:
             v = self.activation(v)
 
