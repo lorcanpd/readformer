@@ -672,6 +672,10 @@ def main():
 if __name__ == '__main__':
     if not check_cuda_availability():
         pass
+    # If CPU only (no cuda of mps), exit the program
+    elif not torch.backends.mps.is_available() and not torch.cuda.is_available():
+        logging.error("No CUDA or MPS available.")
+        sys.exit(1)
     else:
         mp.set_start_method('spawn', force=True)
     main()

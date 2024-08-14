@@ -89,7 +89,6 @@ class Model(nn.Module):
         :returns:
             Output tensor after passing through all transformer blocks.
         """
-        x = self.dropout(x)
         for layer in self.layers:
             x = layer(x, positions)
 

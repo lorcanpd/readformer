@@ -23,12 +23,15 @@ class HyenaProjection(Module):
         super(HyenaProjection, self).__init__()
         self.num_heads = num_heads
         self.head_dim = emb_dim // num_heads
-        self.groups = n_order + 1
+        self.groups = n_order + 2
         self.emb_dim = emb_dim
         self.W = nn.Parameter(
             nn.init.kaiming_uniform_(torch.randn(
                 self.num_heads, self.head_dim, self.groups * self.head_dim
             ))
+        )
+        self.B = nn.Parameter(
+            nn.init.zeros_(torch.randn(self.num_heads, self.groups * self.head_dim))
         )
         self.conv = nn.Conv1d(
             self.groups * self.head_dim * num_heads,
@@ -55,13 +58,14 @@ class HyenaProjection(Module):
         # (batch_size, seq_len, num_heads, head_dim)
         x = inputs.view(batch_size, seq_len, self.num_heads, self.head_dim)
         # Reshape for matrix multiplication and apply projection weights
-        x = torch.einsum('bsgd,gdh->bsgh', x, self.W)
+        x = torch.einsum('bsgd,gdh->bsgh', x, self.W) + self.B
         # Reshape for convolution
         x = x.reshape(
             batch_size, seq_len, self.num_heads * self.groups * self.head_dim
         )
         # (batch_size, num_heads*groups*head_dim, seq_len)
         x = x.transpose(1, 2)
+
         # Apply the convolution
         z = self.conv(x)
         # Set the values at the padded positions to zero
@@ -242,7 +246,7 @@ class HyenaFilter(Module):
         seq_length, emb_dim = positional_encodings.shape
         # positional_encodings = positional_encodings.view(1, seq_length, self.num_heads, self.head_dim)
         # Apply the feed-forward network with sine activation
-        h_hat = torch.sin(self.ffn(positional_encodings)).view(
+        h_hat = self.ffn(positional_encodings).view(
             seq_length, self.n_order, self.num_heads, self.head_dim
         )
 
