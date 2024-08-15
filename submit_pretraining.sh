@@ -26,25 +26,17 @@ MAX_SEQUENCE_LENGTH=8192
 WARM_UP_EPOCHS=2
 EPOCHS_AT_INTERVAL=1
 ITERS_IN_EPOCH=400
-CORRUPTION_RATE="variable"
+CORRUPTION_RATE=0.15
 PROPORTION_RANDOM=0.1
-MAIN_LR=1e-3
+MAIN_LR=5e-4
 
 #LAYER_NUMS=( 2 4 6 )
 LAYER_NUMS=( 2 4 )
 
-#CORRUPTION_SCALE=0.5
-#NAME="TEST"
+NAME="new_masking_procedure"
 
-NAME="6hour_testing_of_model_depth"
-
-#SCALES=( 0.5 0.75 0.9 )
-SCALE=0.2
 
 for NUM_LAYERS in "${LAYER_NUMS[@]}"; do
-  # Set the arguments
-#  NAME="${BASENAME}_corrupt_${scale}"
-  CORRUPTION_SCALE=${SCALE}
 
   job_id=$(bsub << EOF | grep -oE "[0-9]+"
 #!/bin/bash
@@ -90,7 +82,6 @@ singularity exec --nv \
     --corruption_rate ${CORRUPTION_RATE} \
     --proportion_random ${PROPORTION_RANDOM} \
     --main_lr ${MAIN_LR} \
-    --corruption_scale ${CORRUPTION_SCALE} \
     --name ${NAME} \
     --wandb
 

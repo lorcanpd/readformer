@@ -10,9 +10,11 @@ from components.classification_head import (
 )
 from components.pretrain_utils import (
     # replacement_loss,
-    get_replacement_mask,
+    # get_replacement_mask,
     # adversarial_loss,
-    create_intervals, create_corruption_rates,
+    apply_masking_with_consistent_replacements,
+    create_intervals,
+    # create_corruption_rates,
     # WarmupConstantScheduler,
     mlm_accuracy
     # get_weights, check_weights
@@ -101,9 +103,9 @@ def get_args():
                         default=2, help='Number of epochs at interval.')
     parser.add_argument('--iters_in_epoch', type=int, default=50,
                         help='Number of iterations in an epoch.')
-    parser.add_argument('--corruption_rate', type=str,
-                        default="variable",
-                        help='Corruption rate.')
+    parser.add_argument('--corruption_rate', type=float,
+                        default=0.15,
+                        help='Rate at which bases are selected for masking/replacement.')
     parser.add_argument(
         '--proportion_random', type=float, default=0.1,
         help='Proportion of corrupted labels to be assigned random nucleotides.'
@@ -118,10 +120,10 @@ def get_args():
     )
     parser.add_argument('--kernel_size', type=int, default=15,
                         help='Kernel size for the Hyena block.')
-    parser.add_argument(
-        '--corruption_scale', type=float, default=0.9,
-        help='Scale for corruption rates.'
-    )
+    # parser.add_argument(
+    #     '--corruption_scale', type=float, default=0.9,
+    #     help='Scale for corruption rates.'
+    # )
     parser.add_argument('--name', type=str, default='readformer',
                         help='Name with which to save the model.')
     parser.add_argument('--model_dir', type=str, default='models',
@@ -288,7 +290,7 @@ def main():
     logging.info(f"readformer: {readformer}")
     if readformer:
         logging.info(f"kernel_size: {kernel_size}")
-    logging.info(f"corruption_scale: {args.corruption_scale}")
+    # logging.info(f"corruption_scale: {args.corruption_scale}")
     logging.info(f"name: {args.name}")
 
     if args.wandb:
@@ -329,6 +331,7 @@ def main():
             "learning_rate_main": main_lr,
         })
 
+    mask_rate = 1.0 - 2 * proportion_random
     nucleotide_embeddings = NucleotideEmbeddingLayer(
         emb_dim // 2, mlm_mode=True
     ).apply(init_weights).to(device)
@@ -336,7 +339,6 @@ def main():
         emb_dim // 2,
         name='metric', num_metrics=16
     ).apply(init_weights).to(device)
-
     readformer = Model(
         emb_dim=emb_dim, heads=num_heads, num_layers=num_layers,
         n_order=n_order,
@@ -367,13 +369,13 @@ def main():
 
     # Get nucleotide intervals up to the nucleotide threshold
     intervals = create_intervals(max_sequence_length, 256)
-    if corruption_rate == "variable":
-        corruption_rates = create_corruption_rates(
-            intervals, min_rate=0.15, read_length=250,
-            scale=args.corruption_scale
-        )
-    else:
-        corruption_rates = [0.2] * len(intervals)
+    # if corruption_rate == "variable":
+    #     corruption_rates = create_corruption_rates(
+    #         intervals, min_rate=0.15, read_length=250,
+    #         scale=args.corruption_scale
+    #     )
+    # else:
+    #     corruption_rates = [0.2] * len(intervals)
 
     i = 0
     j = 0
@@ -427,17 +429,6 @@ def main():
             bitwise_flags = batch['bitwise_flags']#.to(device)
             positions = batch['positions']#.to(device)
 
-            # Identify the positions to corrupt
-            all_replaced = get_replacement_mask(
-                positions, rate=corruption_rates[j]
-            )
-            # Select some positions to replace with random nucleotides
-            random_mask = all_replaced & (
-                torch.rand_like(all_replaced.float()) < proportion_random
-            )
-            # And other to be replaced with the mask token
-            mask_token_mask = all_replaced & ~random_mask
-
             metrics = torch.cat(
                 [
                     base_qualities.unsqueeze(-1),
@@ -449,79 +440,23 @@ def main():
                 dim=-1
             )
 
-            # metric_emb = torch.cat(
-            #     [
-            #         float_metric_embeddings(float_metrics),
-            #         binary_metric_embeddings(binary_vec)
-            #     ],
-            #     dim=-1
-            # )
-
-            # metric_emb = float_metric_embeddings(
-            #     float_metrics) + binary_metric_embeddings(binary_vec)
-            # Get as many masked embeddings as there are replacement positions
-            masked_sequence = nucleotide_sequences.clone()#.to(device)
-            # apply the mask token to the masked positions
-            masked_sequence[
-                mask_token_mask] = nucleotide_embeddings.mask_index
-            # TODO For plotting replacements.
-            # masked_seq = masked_sequence
-            # randomise the nucleotides at the random positions
-            # num_random_replacements = random_mask.sum().item()
-            # MAke all the random replacements the same at the same position
-
-            # Flatten the positions and random_mask tensors for easier processing
-            flat_positions = positions.view(-1)
-            flat_random_mask = random_mask.view(-1)
-
-            # Filter out the unique positions where random_mask is True
-            unique_positions = flat_positions[flat_random_mask].unique()
-            unique_positions = unique_positions[unique_positions != -1]
-
-            # Generate a random nucleotide for each unique position
-            random_nucleotides = torch.randint(
-                0, 4, (unique_positions.size(0),),
-                dtype=torch.int64)
-            # Create a mapping from each position to its corresponding random
-            # nucleotide
-            position_to_random_nucleotide = dict(
-                zip(unique_positions.tolist(), random_nucleotides.tolist())
-            )
-
-            # Flatten the masked_sequence for easier processing
-            flat_masked_sequence = masked_sequence.view(-1)
-            # Replace positions in flat_masked_sequence using the mapping
-            for pos in unique_positions:
-                flat_masked_sequence[
-                    flat_positions == pos
-                    ] = position_to_random_nucleotide[pos.item()]
-
-            # Reshape the masked_sequence back to its original shape
-            masked_sequence = flat_masked_sequence.view_as(nucleotide_sequences)
-
-            # TODO For plotting replacements.
-            # Extract the first sequence for visualization
-            # original_sequence = nucleotide_sequences
-            # TODO For plotting replacements.
-            # random_replaced_seq = flat_masked_sequence.view_as(nucleotide_sequences)
-
-            # TODO For plotting replacements.
-            # plot_aligned_sequences(original_sequence, masked_seq, random_replaced_seq, mask_token_mask, random_mask, positions)
-
+            mask_token_index = nucleotide_embeddings.mask_index
             positions = positions.to(device)
             valid_mask = valid_mask.to(device)
             nucleotide_sequences = nucleotide_sequences.to(device)
-            masked_sequence = masked_sequence.to(device)
-            mask_token_mask = mask_token_mask.to(device)
             with device_context(device):
-                masked_nucleotide_emb = nucleotide_embeddings(masked_sequence)
-                # model_input = masked_nucleotide_emb + metric_emb * (
-                #     ~mask_token_mask).float().unsqueeze(-1)
+                masked_sequences, masked_indices = apply_masking_with_consistent_replacements(
+                    positions, nucleotide_sequences, mask_token_index,
+                    rate=corruption_rate, mask_rate=mask_rate,
+                    keep_rate=proportion_random,
+                    random_replace_rate=proportion_random
+                )
+                masked_nucleotide_emb = nucleotide_embeddings(masked_sequences)
                 metric_emb = metric_embeddings(metrics.to(device))
                 model_input = torch.cat(
                     [
                         masked_nucleotide_emb,
-                        metric_emb * (~mask_token_mask).float().unsqueeze(-1)
+                        metric_emb * (~masked_indices).float().unsqueeze(-1)
                     ], dim=-1
                 )
 
@@ -570,11 +505,10 @@ def main():
             if args.wandb:
                 wandb.log(
                     {
-                        "loss": loss.item(), "iteration": i,
+                        "loss": loss.item(),
                         "batch_accuracy": batch_accuracy,
                         # "lr": scheduler.get_last_lr()[0],
-                        "interval": intervals[j],
-                        "corruption_rate": corruption_rates[j]
+                        "interval": intervals[j]
                     }
                 )
                 if profile_batch:

@@ -1,3 +1,5 @@
+import random
+
 import torch
 import torch.nn.functional as F
 
@@ -144,6 +146,43 @@ def adversarial_loss(predictions, replacement_mask, mixing_mask):
     return loss
 
 
+def map_probabilities_to_positions(positions):
+    """
+    Generate random probabilities for unique positions in each sequence and map
+    them back to the original positions.
+
+    :param positions:
+        Tensor of shape (batch_size, seq_length) representing genomic positions.
+    :return:
+        Tensor of the same shape as `positions`, where each value is a
+        probability mapped from unique positions.
+    """
+    batch_size, seq_length = positions.size()
+
+    # Flatten positions for easier processing across the entire batch
+    positions_flat = positions.view(-1)
+
+    # Generate unique positions across the batch and get the inverse indices
+    unique_positions, inverse_indices = torch.unique(
+        positions_flat, return_inverse=True
+    )
+
+    # Generate random probabilities for each unique position
+    random_probs = torch.rand(
+        unique_positions.size(0), device=positions.device
+    )
+
+    # Map probabilities back to the original positions using inverse indices
+    probabilities_mapped_flat = random_probs[inverse_indices]
+
+    # Reshape back to the original batch and sequence shape
+    probabilities_mapped = probabilities_mapped_flat.view(
+        batch_size, seq_length
+    )
+
+    return probabilities_mapped
+
+
 def generate_random_for_unique_positions(positions):
     """
     Generate random values for each unique position in the input sequence.
@@ -154,6 +193,7 @@ def generate_random_for_unique_positions(positions):
         A tuple of lists containing unique positions and random values for each
         unique position in the input sequence.
     """
+    breakpoint()
     batch_size, seq_length = positions.size()
     unique_values = []
     unique_randoms = []
@@ -209,42 +249,52 @@ def broadcast_unique_randoms_to_input(
     return broadcasted_randoms
 
 
-def get_replacement_mask(positions, rate=0.15):
-    """
-    Generate a mask for replacing elements in the input sequence based on a
-    corruption rate. This is done in such a manner that a large proportion of
-    positons will see few replacements, while a small proportion of positions
-    will see many replacements, at a given genomic position. This is intended
-    to replicate the patterns exhibited by mutations and sequencing artefacts.
+def apply_masking_with_consistent_replacements(
+        positions, nucleotide_sequences, mask_token, rate=0.15,
+        mask_rate=0.8, keep_rate=0.1, random_replace_rate=0.1
+):
+    assert mask_rate + keep_rate + random_replace_rate == 1.0, "The rates must sum to 1.0."
 
-    :param positions:
-        Genomic positions of each element in the input sequence of shape
-        (batch_size, seq_length).
-    :param rate:
-        The corruption rate for replacing elements in the input sequence.
-    :return:
-        A boolean mask indicating which elements to replace in the input
-        sequence.
-    """
-    unique_values, unique_randoms = generate_random_for_unique_positions(
-        positions
-    )
-    broadcasted_randoms = broadcast_unique_randoms_to_input(
-        positions, unique_values, unique_randoms
-    )
-    valid_mask = positions != -1
-    # Generate random numbers for each valid position in the sequence
-    element_limit = 1 / broadcasted_randoms
-    element_randoms = torch.rand(
-        positions.shape, device=positions.device,
-        dtype=torch.float32
-    ) * (1 - broadcasted_randoms) + broadcasted_randoms
-    product = element_randoms * broadcasted_randoms * element_limit
-    # Create a replacement mask based on the threshold
-    replace_mask = product < rate
-    replace_mask = replace_mask & valid_mask
+    batch_size, seq_length = nucleotide_sequences.size()
 
-    return replace_mask
+    # Generate the initial position-based mask
+    position_probabilities = map_probabilities_to_positions(positions)
+
+    # Create masks based on the probabilities
+    random_probs = torch.rand(
+        (batch_size, seq_length), device=nucleotide_sequences.device
+    )
+    mask_mask = (random_probs < rate) | (position_probabilities < rate)
+    random_replace_mask = (
+            (random_probs >= mask_rate) &
+            (random_probs < mask_rate + random_replace_rate) &
+            mask_mask
+    )
+    mask_mask = mask_mask & ~random_replace_mask
+
+    replacements = nucleotide_sequences.clone().to(nucleotide_sequences.device)
+    bases = [0, 1, 2, 3]
+    random.shuffle(bases)
+    i = 0
+    if random_replace_mask.sum() > 0:
+        replacement_base = bases[i]
+        replacements[random_replace_mask] = replacement_base
+        replacement_invalid_mask = (replacements == nucleotide_sequences) & random_replace_mask
+
+        while replacement_invalid_mask.any():
+            i += 1
+            try:
+                replacement_base = bases[i]
+            except IndexError:
+                # If canonical bases are exhausted, do not replace
+                break
+            replacements[replacement_invalid_mask] = replacement_base
+            replacement_invalid_mask = (replacements == nucleotide_sequences) & random_replace_mask
+
+    # Apply the masking
+    replacements[mask_mask] = mask_token
+
+    return replacements, mask_mask
 
 
 def mlm_accuracy(logits, target):
