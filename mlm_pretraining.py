@@ -235,7 +235,7 @@ def main():
     main_lr = args.main_lr
     readformer = args.readformer
     kernel_size = args.kernel_size
-    checkpoint_path = f"{args.model_dir}/{args.name}_latest.pth"
+    checkpoint_path = f"{args.model_dir}/{args.name}_lay{num_layers}_head{num_heads}_ord{n_order}_latest.pth"
     wand_api_path = args.wandb_api_path
     profiling = args.profiling
 
