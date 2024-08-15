@@ -530,7 +530,7 @@ def main():
                         }
                     )
 
-                if i > 0 and mean_loss < best_mean_loss:
+                if i > 0:
                     torch.save({
                         'epoch': epoch,
                         'model_state_dict': readformer.state_dict(),
