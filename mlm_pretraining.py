@@ -1,4 +1,5 @@
 import torch
+import numpy as np
 # import torch.nn as nn
 from components.data_streaming import create_data_loader
 from components.base_model import Model, init_weights
@@ -14,6 +15,7 @@ from components.pretrain_utils import (
     # adversarial_loss,
     apply_masking_with_consistent_replacements,
     create_intervals,
+    get_random_alternative_labels,
     # create_corruption_rates,
     # WarmupConstantScheduler,
     mlm_accuracy
@@ -144,6 +146,10 @@ def get_args():
         '--profiling', action='store_true',
         help='Enable profiling.'
     )
+    parser.add_argument(
+        '--mixing_alpha', type=float, default=0.2,
+        help='Alpha parameter for sequence label mixing.'
+    )
 
     args = parser.parse_args()
     return args
@@ -238,6 +244,7 @@ def main():
     checkpoint_path = f"{args.model_dir}/{args.name}_lay{num_layers}_head{num_heads}_ord{n_order}_latest.pth"
     wand_api_path = args.wandb_api_path
     profiling = args.profiling
+    mixing_alpha = args.mixing_alpha
 
     # Map the string logging level to the actual logging level
     numeric_level = getattr(logging, args.logging.upper(), None)
@@ -292,6 +299,7 @@ def main():
         logging.info(f"kernel_size: {kernel_size}")
     # logging.info(f"corruption_scale: {args.corruption_scale}")
     logging.info(f"name: {args.name}")
+    logging.info(f"mixing_alpha: {mixing_alpha}")
 
     if args.wandb:
         # load api key from file
@@ -329,6 +337,7 @@ def main():
             "corruption_rate": corruption_rate,
             "proportion_random_replacement": proportion_random,
             "learning_rate_main": main_lr,
+            "mixing_alpha": mixing_alpha,
         })
 
     mask_rate = 1.0 - 2 * proportion_random
@@ -444,19 +453,48 @@ def main():
             positions = positions.to(device)
             valid_mask = valid_mask.to(device)
             nucleotide_sequences = nucleotide_sequences.to(device)
-            with device_context(device):
-                masked_sequences, masked_indices = apply_masking_with_consistent_replacements(
+            with (device_context(device)):
+                (
+                    masked_sequences, masked_indices, replaced_indices,
+                    kept_indices  # Selected for corruption but not altered.
+                ) = apply_masking_with_consistent_replacements(
                     positions, nucleotide_sequences, mask_token_index,
                     rate=corruption_rate, mask_rate=mask_rate,
-                    keep_rate=proportion_random,
+                    kernel_size=kernel_size, keep_rate=proportion_random,
                     random_replace_rate=proportion_random
                 )
+                alt_labels = get_random_alternative_labels(
+                    masked_sequences[
+                        masked_indices | replaced_indices | kept_indices
+                    ]
+                )
+                lambdas = torch.from_numpy(
+                    np.random.beta(mixing_alpha, mixing_alpha, size=alt_labels.size(-1))
+                ).to(device=device, dtype=torch.float32).detach()
+                # Label mixing to be carried out on the indices contained in
+                # replaced_indices, masked_indices and kept_indices.
                 masked_nucleotide_emb = nucleotide_embeddings(masked_sequences)
+                # Apply the label mixing to the masked nucleotide embeddings.
+                mixed_embeddings = lambdas.unsqueeze(-1) * masked_nucleotide_emb[
+                    masked_indices | replaced_indices | kept_indices] + (
+                        1 - lambdas.unsqueeze(-1)) * nucleotide_embeddings(alt_labels)
+                masked_nucleotide_emb[
+                    masked_indices | replaced_indices | kept_indices
+                ] = mixed_embeddings
+                # Expand lambdas over the whole input tensor for calculating the loss.
+                expanded_lambdas = torch.zeros_like(positions, dtype=torch.float32)
+                expanded_lambdas[
+                    masked_indices | replaced_indices | kept_indices
+                ] = lambdas
                 metric_emb = metric_embeddings(metrics.to(device))
+                metric_emb = metric_emb * (
+                        1 - expanded_lambdas.unsqueeze(-1) *
+                        masked_indices.unsqueeze(-1).float()
+                )
                 model_input = torch.cat(
                     [
                         masked_nucleotide_emb,
-                        metric_emb * (~masked_indices).float().unsqueeze(-1)
+                        metric_emb
                     ], dim=-1
                 )
 
@@ -470,12 +508,23 @@ def main():
                     output = classifier(output)
                     batch_accuracy = mlm_accuracy(output, nucleotide_sequences)
                     # Main model loss and optimisation
-                    loss = loss_fn(
-                        output[valid_mask],
-                        nucleotide_sequences[valid_mask],
+                    # Need to adapt to incorporate the label mixing.
+                    unchanged_loss = loss_fn(
+                        output[valid_mask & ~masked_indices & ~replaced_indices],
+                        nucleotide_sequences[valid_mask & ~masked_indices & ~replaced_indices],
+                        scale_factor=0.1
+                    )
+                    replaced_loss = loss_fn(
+                        output[valid_mask & replaced_indices],
+                        nucleotide_sequences[valid_mask & replaced_indices],
                         scale_factor=1.0
                     )
-
+                    masked_loss = loss_fn(
+                        output[valid_mask & masked_indices],
+                        nucleotide_sequences[valid_mask & masked_indices],
+                        scale_factor=1.0
+                    )
+                    loss = unchanged_loss + replaced_loss + masked_loss
                     optimiser.zero_grad()
                     loss.backward()
 
@@ -483,7 +532,9 @@ def main():
                             and args.logging.upper() == 'DEBUG'):
                         torch.cuda.synchronize()
 
-                    # torch.nn.utils.clip_grad_norm_(readformer.parameters(), max_norm=1)
+                    torch.nn.utils.clip_grad_norm_(
+                        params, max_norm=1
+                    )
                     optimiser.step()
 
                     if (torch.cuda.is_available()
@@ -501,6 +552,7 @@ def main():
                     )
 
             logging.debug(f"Loss at iteration {i}: {loss.item()}")
+            logging.debug(f"Batch accuracy: {batch_accuracy}")
 
             if args.wandb:
                 wandb.log(
