@@ -1,7 +1,9 @@
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 from components.better_device_handling import Module
+
 
 class NucleotideLookup:
     def __init__(self):
@@ -81,7 +83,8 @@ class MetricEmbedding(Module):
         )
 
         self.bias = nn.Parameter(torch.zeros(embedding_dim))
-        self.activation = nn.ReLU()
+        # self.activation = nn.ReLU()
+        self.activation = lambda x: x * torch.tanh(F.softplus(x))
 
     def forward(self, inputs):
         return self.activation(

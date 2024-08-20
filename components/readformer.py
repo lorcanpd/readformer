@@ -241,10 +241,14 @@ class ReadwiseHyena(Module):
         """
 
         original_shape = embeddings.shape
-        # Split the input embeddings into reads
-        (
-            read_embeddings, read_positions, start_indices, batch_indices
-        ) = split_into_reads(embeddings, positions)
+        if original_shape[1] > 256:
+            # Split the input embeddings into reads
+            (
+                read_embeddings, read_positions, start_indices, batch_indices
+            ) = split_into_reads(embeddings, positions)
+        else:
+            read_embeddings = embeddings
+            read_positions = positions
 
         *x, v = self.projection(read_embeddings, read_positions)
         # Initial residual connection
@@ -267,10 +271,12 @@ class ReadwiseHyena(Module):
 
         hyena_out = v.matmul(self.output_projection) + self.output_bias
 
-        hyena_out = reassemble_sequences(
-            original_shape, hyena_out, read_positions, start_indices,
-            batch_indices
-        )
+        if original_shape[1] > 256:
+            hyena_out = reassemble_sequences(
+                original_shape, hyena_out, read_positions, start_indices,
+                batch_indices
+            )
+
         return hyena_out
 
 
@@ -303,12 +309,22 @@ class PositionwiseSelfAttention(Module):
         return output
 
 
-class ReadformerBlock(Module):
+class ReadformerBlock(nn.Module):
 
-    def __init__(self, emb_dim, n_order, kernel_size, num_heads, dropout=0.1):
+    def __init__(
+            self, emb_dim, n_order, kernel_size, num_heads, num_hyena=1,
+            dropout=0.1
+    ):
         super(ReadformerBlock, self).__init__()
-        self.layer_norm_1 = nn.LayerNorm(emb_dim)
-        self.hyena = ReadwiseHyena(emb_dim, n_order, kernel_size, num_heads)
+        self.layer_norms_hyena = nn.ModuleList(
+            [nn.LayerNorm(emb_dim) for _ in range(num_hyena)]
+        )
+        self.hyenas = nn.ModuleList(
+            [
+                ReadwiseHyena(emb_dim, n_order, kernel_size, num_heads)
+                for _ in range(num_hyena)
+            ]
+        )
         self.layer_norm_2 = nn.LayerNorm(emb_dim)
         self.feed_forward_1 = FeedForward(
             emb_dim, hidden_dim=emb_dim, activation="mish"
@@ -320,30 +336,67 @@ class ReadformerBlock(Module):
             emb_dim, hidden_dim=emb_dim, activation="mish"
         )
         self.dropout = nn.Dropout(dropout)
+        self.num_hyena = num_hyena
+
+        self.use_self_attention = True
 
     def forward(self, embeddings, positions):
-        # Apply layer normalisation
-        hyena_input = self.layer_norm_1(embeddings)
-        # Update nucleotide embeddings using intra-read information and add
-        # residual connection.
-        hyena_out = self.dropout(
-            self.hyena(hyena_input, positions)
-        ) + embeddings
-        ffn_1_input = self.layer_norm_2(hyena_out)
+        hyena_out = embeddings
 
+        # Process multiple Hyena layers sequentially
+        for i in range(self.num_hyena):
+            hyena_input = self.layer_norms_hyena[i](hyena_out)
+            hyena_out = self.dropout(self.hyenas[i](hyena_input, positions)) + hyena_out
+
+        # Apply first feed-forward layer
+        ffn_1_input = self.layer_norm_2(hyena_out)
         ffn_1_out = self.dropout(self.feed_forward_1(ffn_1_input)) + hyena_out
 
-        self_attention_input = self.layer_norm_3(ffn_1_out)
-        # Update nucleotide embeddings using inter-read information
-        # position-wise.
-        self_attention_out = self.dropout(
-            self.self_attention(self_attention_input, positions)
-        ) + ffn_1_out
-        # Apply layer normalisation.
-        ffn_2_input = self.layer_norm_4(self_attention_out)
-        # Apply feed-forward layer and add residual connection.
-        output = self.dropout(
-            self.feed_forward_2(ffn_2_input)
-        ) + self_attention_out
+        if self.use_self_attention:
+            # Apply self-attention
+            self_attention_input = self.layer_norm_3(ffn_1_out)
+            self_attention_out = self.dropout(
+                self.self_attention(self_attention_input, positions)
+            ) + ffn_1_out
+
+            # Apply second feed-forward layer
+            ffn_2_input = self.layer_norm_4(self_attention_out)
+            output = self.dropout(self.feed_forward_2(ffn_2_input)) + self_attention_out
+        else:
+            output = ffn_1_out
 
         return output
+
+    def set_use_self_attention(self, use_self_attention):
+        self.use_self_attention = use_self_attention
+
+    def freeze_hyena(self):
+        for hyena in self.hyenas:
+            for param in hyena.parameters():
+                param.requires_grad = False
+
+        for layer_norm in self.layer_norms_hyena:
+            for param in layer_norm.parameters():
+                param.requires_grad = False
+
+        for param in self.feed_forward_1.parameters():
+            param.requires_grad = False
+
+        for param in self.layer_norm_2.parameters():
+            param.requires_grad = False
+
+    def unfreeze_hyena(self):
+        for hyena in self.hyenas:
+            for param in hyena.parameters():
+                param.requires_grad = True
+
+        for layer_norm in self.layer_norms_hyena:
+            for param in layer_norm.parameters():
+                param.requires_grad = True
+
+        for param in self.feed_forward_1.parameters():
+            param.requires_grad = True
+
+        for param in self.layer_norm_2.parameters():
+            param.requires_grad = True
+

@@ -49,8 +49,8 @@ class Model(nn.Module):
         Size of the convolution kernel for the Hyena local CNN. Default is 3.
     """
     def __init__(
-            self, emb_dim, num_layers, readformer=True, kernel_size=3, heads=8,
-            n_order=4, dropout=0.1
+            self, emb_dim, num_layers, readformer=True, kernel_size=3,
+            num_hyena=3, heads=8, n_order=4, dropout=0.1
     ):
         super(Model, self).__init__()
         self.emb_dim = emb_dim
@@ -63,7 +63,7 @@ class Model(nn.Module):
             self.layers = nn.ModuleList(
                 [
                     ReadformerBlock(
-                        emb_dim, n_order, kernel_size, heads
+                        emb_dim, n_order, kernel_size, heads, num_hyena
                     )
                     for _ in range(num_layers)
                 ]
@@ -93,6 +93,32 @@ class Model(nn.Module):
             x = layer(x, positions)
 
         return x
+
+    def set_use_self_attention(self, use_self_attention):
+        """
+        Set whether to use position-wise self-attention following the read-wise
+        hyena filters.
+
+        :param use_self_attention:
+            Whether to use self-attention or Hyena blocks.
+        """
+        for layer in self.layers:
+            layer.set_use_self_attention(use_self_attention)
+
+    def freeze_hyena(self):
+        """
+        Freeze the weights of the Hyena blocks.
+        """
+        for layer in self.layers:
+            layer.freeze_hyena()
+
+    def unfreeze_hyena(self):
+        """
+        Unfreeze the weights of the Hyena blocks.
+        """
+        for layer in self.layers:
+            layer.unfreeze_hyena()
+
 
 
 
