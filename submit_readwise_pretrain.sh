@@ -25,8 +25,9 @@ BATCH_SIZE=256
 EMB_DIM=128
 MAX_SEQUENCE_LENGTH=2560  # Single reads
 WARM_UP_EPOCHS=2
-EPOCHS_AT_INTERVAL=1
+#EPOCHS_AT_INTERVAL=1
 ITERS_IN_EPOCH=2000
+MAX_ITERS=2000
 CORRUPTION_RATE=0.2
 PROPORTION_RANDOM=0.25
 MIXING_ALPHA=0.4
@@ -77,7 +78,6 @@ singularity exec --nv \
     --emb_dim ${EMB_DIM} \
     --max_sequence_length ${MAX_SEQUENCE_LENGTH} \
     --warm_up_epochs ${WARM_UP_EPOCHS} \
-    --epochs_at_interval ${EPOCHS_AT_INTERVAL} \
     --iters_in_epoch ${ITERS_IN_EPOCH} \
     --corruption_rate ${CORRUPTION_RATE} \
     --proportion_random ${PROPORTION_RANDOM} \
