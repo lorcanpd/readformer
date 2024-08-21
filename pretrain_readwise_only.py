@@ -1,6 +1,7 @@
 import torch
 import numpy as np
 # import torch.nn as nn
+from torch.optim.lr_scheduler import OneCycleLR
 from components.data_streaming import create_data_loader
 from components.base_model import Model, init_weights
 from components.read_embedding import (
@@ -21,6 +22,7 @@ from components.pretrain_utils import (
     mlm_accuracy
     # get_weights, check_weights
 )
+from components.lamb import LAMB
 
 import wandb
 import argparse
@@ -378,8 +380,16 @@ def main():
             list(readformer.parameters()) +
             list(classifier.parameters())
     )
-    optimiser = torch.optim.Adam(
-        params, lr=main_lr,
+    # optimiser = torch.optim.Adam(
+    #     params, lr=main_lr,
+    # )
+    optimiser = LAMB(
+        params, lr=main_lr, eps=1e-9, weight_decay=0.03, adam=False,
+        adaptive_noise=True, noise_std=0.01, use_curvature=True
+    )
+    scheduler = OneCycleLR(
+        optimiser, max_lr=main_lr, total_steps=args.max_iters,
+        pct_start=0.3, anneal_strategy='cos', cycle_momentum=False
     )
 
     loss_fn = MLMLoss()
@@ -515,7 +525,28 @@ def main():
             ) as prof:
                 output = readformer(model_input, positions)
                 output = classifier(output)
-                batch_accuracy = mlm_accuracy(output, nucleotide_sequences)
+                batch_accuracy = mlm_accuracy(
+                    output[valid_mask], nucleotide_sequences[valid_mask]
+                )
+                masked_accuracy = mlm_accuracy(
+                    output[masked_indices], nucleotide_sequences[masked_indices]
+                )
+                replaced_accuracy = mlm_accuracy(
+                    output[replaced_indices], nucleotide_sequences[replaced_indices]
+                )
+                kept_accuracy = mlm_accuracy(
+                    output[kept_indices], nucleotide_sequences[kept_indices]
+                )
+                not_corrupted_accuracy = mlm_accuracy(
+                    output[
+                        valid_mask & ~masked_indices & ~replaced_indices &
+                        ~kept_indices
+                    ],
+                    nucleotide_sequences[
+                        valid_mask & ~masked_indices & ~replaced_indices &
+                        ~kept_indices
+                    ]
+                )
                 # Main model loss and optimisation
                 # Need to adapt to incorporate the label mixing.
                 unchanged_loss = loss_fn(
@@ -549,6 +580,13 @@ def main():
                 #     params, max_norm=1
                 # )
                 optimiser.step()
+                try:
+                    scheduler.step()
+                except ValueError as e:
+                    if i >= args.max_iters:
+                        pass
+                    else:
+                        logging.error(f"Error in scheduler: {e}")
 
                 if (torch.cuda.is_available()
                         and args.logging.upper() == 'DEBUG'):
@@ -564,15 +602,19 @@ def main():
                     sort_by="cpu_time_total"
                 )
 
-        logging.debug(f"Loss at iteration {i}: {loss.item()}")
+        logging.debug(f"Loss at iteration {i}: {loss.item()}, lr: {scheduler.get_last_lr()[0]}")
         logging.debug(f"Batch accuracy: {batch_accuracy}")
+        logging.debug(f"Masked accuracy: {masked_accuracy}")
+        logging.debug(f"Replaced accuracy: {replaced_accuracy}")
+        logging.debug(f"Kept accuracy: {kept_accuracy}")
+        logging.debug(f"Not corrupted accuracy: {not_corrupted_accuracy}")
 
         if args.wandb:
             wandb.log(
                 {
                     "loss": loss.item(),
                     "batch_accuracy": batch_accuracy,
-                    # "lr": scheduler.get_last_lr()[0],
+                    "lr": scheduler.get_last_lr()[0],
                     # "interval": intervals[j]
                 }
             )

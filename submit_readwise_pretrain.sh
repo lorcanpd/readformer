@@ -16,28 +16,29 @@ GPU_MEMORY=80000
 MEMORY=32768
 MAX_ITERS=1000
 CORES=12
+NUM_HYENA=3
 NUM_ORDER=2
 NUM_HEADS=8
-KERNEL_SIZE=3
+#KERNEL_SIZE=3
 NUM_LAYERS=1
 MIN_READ_QUALITY=10
-BATCH_SIZE=2048
+BATCH_SIZE=1024
 EMB_DIM=64
 MAX_SEQUENCE_LENGTH=256  # Single reads
 WARM_UP_EPOCHS=2
 #EPOCHS_AT_INTERVAL=1
-ITERS_IN_EPOCH=2000
-MAX_ITERS=2000
+ITERS_IN_EPOCH=1000
+MAX_ITERS=1000
 CORRUPTION_RATE=0.2
 PROPORTION_RANDOM=0.25
-MIXING_ALPHA=0.4
-MAIN_LR=0.0032
+MIXING_ALPHA=0.3
+MAIN_LR=0.0064
 
-HYENA_NUMS=( 4 )
+KERNEL_SIZES=( 3 7 15 )
 
-NAME="_hyena_only_pretrain"
+NAME="hyena_only_pretrain_various_kernel_sizes"
 
-for NUM_HYENA in "${HYENA_NUMS[@]}"; do
+for KERNEL_SIZE in "${KERNEL_SIZES[@]}"; do
 
   job_id=$(bsub << EOF | grep -oE "[0-9]+"
 #!/bin/bash
@@ -91,9 +92,9 @@ EOF
   )
 
   if [[ $? -ne 0 ]]; then
-    echo "Error submitting readformer job with ${NUM_HYENA} stacked hyenas"
+    echo "Error submitting readformer job with a kernel size of ${KERNEL_SIZE}"
     exit 1
   fi
 
-  echo "Submitted readformer job ${job_id} with ${NUM_HYENA} stacked hyenas"
+  echo "Submitted readformer job ${job_id} with a kernel size of ${KERNEL_SIZE}"
 done
