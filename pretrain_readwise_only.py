@@ -545,9 +545,9 @@ def main():
                         and args.logging.upper() == 'DEBUG'):
                     torch.cuda.synchronize()
 
-                torch.nn.utils.clip_grad_norm_(
-                    params, max_norm=1
-                )
+                # torch.nn.utils.clip_grad_norm_(
+                #     params, max_norm=1
+                # )
                 optimiser.step()
 
                 if (torch.cuda.is_available()
