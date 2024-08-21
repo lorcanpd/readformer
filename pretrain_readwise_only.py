@@ -615,6 +615,10 @@ def main():
                     "loss": loss.item(),
                     "batch_accuracy": batch_accuracy,
                     "lr": scheduler.get_last_lr()[0],
+                    "masked_accuracy": masked_accuracy,
+                    "replaced_accuracy": replaced_accuracy,
+                    "kept_accuracy": kept_accuracy,
+                    "not_corrupted_accuracy": not_corrupted_accuracy,
                     # "interval": intervals[j]
                 }
             )
