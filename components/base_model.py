@@ -1,4 +1,6 @@
+import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 # TODO fix the import statements
 from components.readformer import ReadformerBlock
@@ -50,7 +52,7 @@ class Model(nn.Module):
     """
     def __init__(
             self, emb_dim, num_layers, readformer=True, kernel_size=3,
-            num_hyena=3, heads=8, n_order=4, dropout=0.1
+            num_hyena=3, num_attention=2,heads=8, n_order=4, dropout=0.1
     ):
         super(Model, self).__init__()
         self.emb_dim = emb_dim
@@ -58,12 +60,15 @@ class Model(nn.Module):
         self.num_layers = num_layers
         self.kernel_size = kernel_size
         self.dropout = nn.Dropout(dropout)
+        self.input_transform = nn.Linear(emb_dim, emb_dim)
+        self.input_activation = lambda x: x * torch.tanh(F.softplus(x))
 
         if readformer:
             self.layers = nn.ModuleList(
                 [
                     ReadformerBlock(
-                        emb_dim, n_order, kernel_size, heads, num_hyena
+                        emb_dim, n_order, kernel_size, heads, num_hyena,
+                        num_attention
                     )
                     for _ in range(num_layers)
                 ]
@@ -89,21 +94,26 @@ class Model(nn.Module):
         :returns:
             Output tensor after passing through all transformer blocks.
         """
+        x = self.input_activation(self.input_transform(x))
         for layer in self.layers:
             x = layer(x, positions)
 
         return x
 
-    def set_use_self_attention(self, use_self_attention):
+    def set_use_positionwise_self_attention(
+            self, use_positionwise_self_attention
+    ):
         """
         Set whether to use position-wise self-attention following the read-wise
         hyena filters.
 
-        :param use_self_attention:
+        :param use_positionwise_self_attention:
             Whether to use self-attention or Hyena blocks.
         """
         for layer in self.layers:
-            layer.set_use_self_attention(use_self_attention)
+            layer.set_use_positionwise_self_attention(
+                use_positionwise_self_attention
+            )
 
     def freeze_hyena(self):
         """

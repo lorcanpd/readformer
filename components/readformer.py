@@ -9,9 +9,12 @@ from components.hyena import (
 # from components.rotary_encoding import (
 #     compute_theta_vector, compute_rotation_angles, apply_dimensionwise_rotation
 # )
-from components.self_attention import MultiHeadSelfAttention
+from components.self_attention import (
+    MultiHeadSelfAttention, RoPEMultiHeadSelfAttention
+)
 
 from components.better_device_handling import Module
+from components.rms_norm import RMSNorm
 
 
 # TODO: Create some sort of scaling vector system for rapid fine-tuning. Perhaps
@@ -157,14 +160,17 @@ class RotaryHyenaFilter(Module):
         super(RotaryHyenaFilter, self).__init__()
         self.emb_dim = emb_dim
         self.num_heads = num_heads
-        self.filter_generator = HyenaFilter(emb_dim, n_order, num_heads)
-        # Range from 0 to 256-1
-        self.positions = torch.arange(0, 256).to(torch.float32)
+        self.filter_generator = HyenaFilter(
+            emb_dim, n_order, num_heads
+        )
+        self.positions = torch.arange(0, 513).to(torch.float32)
         # self.theta_vector = compute_theta_vector(emb_dim)
+
         self.t = nn.Parameter(
             sinusoidal_positional_encoding(self.positions, self.emb_dim),
             requires_grad=False
         )
+
 
     def forward(self):
         """
@@ -194,7 +200,10 @@ class ReadwiseHyena(Module):
         Number of heads for multi-head processing.
     """
 
-    def __init__(self, emb_dim, n_order, kernel_size, num_heads=4, nonlinearity=None):
+    def __init__(
+            self, emb_dim, n_order, kernel_size, num_heads=4, nonlinearity=None,
+            filter_length=513
+    ):
         super(ReadwiseHyena, self).__init__()
         self.n_order = n_order
         self.num_heads = num_heads
@@ -209,6 +218,7 @@ class ReadwiseHyena(Module):
         self.B = nn.Parameter(
             nn.init.kaiming_uniform_(torch.randn((n_order, 1, self.head_dim, 1)))
         )
+        self.gate_projection = nn.Linear(emb_dim, emb_dim)
         self.dropout = nn.Dropout(0.1)
 
         if nonlinearity == 'gelu':
@@ -254,6 +264,7 @@ class ReadwiseHyena(Module):
         # Initial residual connection
         # v = v + embeddings.view(batch_size, embeddings.shape[1], self.num_heads, self.head_dim).transpose(2, 3)
 
+        # filters = self.filters.unbind(0)
         filters = self.filter()
 
         for i, x_i in enumerate(reversed(x[1:])):
@@ -268,6 +279,10 @@ class ReadwiseHyena(Module):
 
         if self.activation is not None:
             v = self.activation(v)
+
+        gate = torch.sigmoid(self.gate_projection(embeddings))
+        # v = gate * v + (1 - gate) * embeddings
+        v = gate * v
 
         hyena_out = v.matmul(self.output_projection) + self.output_bias
 
@@ -309,15 +324,15 @@ class PositionwiseSelfAttention(Module):
         return output
 
 
-class ReadformerBlock(nn.Module):
+class ReadformerBlock(Module):
 
     def __init__(
             self, emb_dim, n_order, kernel_size, num_heads, num_hyena=1,
-            dropout=0.1
+            num_attention=1, dropout=0.1
     ):
         super(ReadformerBlock, self).__init__()
         self.layer_norms_hyena = nn.ModuleList(
-            [nn.LayerNorm(emb_dim) for _ in range(num_hyena)]
+            [RMSNorm(emb_dim) for _ in range(num_hyena)]
         )
         self.hyenas = nn.ModuleList(
             [
@@ -325,78 +340,107 @@ class ReadformerBlock(nn.Module):
                 for _ in range(num_hyena)
             ]
         )
-        self.layer_norm_2 = nn.LayerNorm(emb_dim)
-        self.feed_forward_1 = FeedForward(
-            emb_dim, hidden_dim=emb_dim, activation="mish"
+
+        # Create multiple read-wise self-attention layers based on num_attention
+        self.layer_norms_attention = nn.ModuleList(
+            [RMSNorm(emb_dim) for _ in range(num_attention)]
         )
-        self.layer_norm_3 = nn.LayerNorm(emb_dim)
-        self.self_attention = PositionwiseSelfAttention(emb_dim, num_heads)
-        self.layer_norm_4 = nn.LayerNorm(emb_dim)
-        self.feed_forward_2 = FeedForward(
-            emb_dim, hidden_dim=emb_dim, activation="mish"
+        self.read_self_attentions = nn.ModuleList(
+            [RoPEMultiHeadSelfAttention(emb_dim, num_heads) for _ in range(num_attention)]
         )
+        self.gate_projections_attention = nn.ModuleList(
+            [nn.Linear(emb_dim, emb_dim) for _ in range(num_attention)]
+        )
+        self.feature_projections_attention = nn.ModuleList(
+            [nn.Linear(emb_dim, emb_dim) for _ in range(num_attention)]
+        )
+
+        # Position-wise self-attention layer remains the same
+        self.layer_norm_4 = RMSNorm(emb_dim)
+        self.pos_self_attention = PositionwiseSelfAttention(emb_dim, num_heads)
+        self.layer_norm_5 = RMSNorm(emb_dim)
+        self.gate_projection_2 = nn.Linear(emb_dim, emb_dim)
+        self.feature_projection_2 = nn.Linear(emb_dim, emb_dim)
         self.dropout = nn.Dropout(dropout)
         self.num_hyena = num_hyena
+        self.num_attention = num_attention
 
-        self.use_self_attention = True
+        self.use_positionwise_self_attention = True
 
     def forward(self, embeddings, positions):
         hyena_out = embeddings
 
-        # Process multiple Hyena layers sequentially
-        for i in range(self.num_hyena):
-            hyena_input = self.layer_norms_hyena[i](hyena_out)
-            hyena_out = self.dropout(self.hyenas[i](hyena_input, positions)) + hyena_out
+        if self.num_hyena > 0:
+            # Process multiple Hyena layers sequentially
+            for i in range(self.num_hyena):
+                hyena_input = self.layer_norms_hyena[i](hyena_out)
+                hyena_out = self.dropout(
+                    self.hyenas[i](hyena_input, positions)) + hyena_out
 
-        # Apply first feed-forward layer
-        ffn_1_input = self.layer_norm_2(hyena_out)
-        ffn_1_out = self.dropout(self.feed_forward_1(ffn_1_input)) + hyena_out
+        # Process multiple read-wise self-attention layers sequentially
+        attention_out = hyena_out
+        if self.num_attention > 0:
+            for i in range(self.num_attention):
+                attention_input = self.layer_norms_attention[i](attention_out)
+                attention_out = self.dropout(
+                    self.read_self_attentions[i](attention_input, positions)
+                ) + attention_out
 
-        if self.use_self_attention:
-            # Apply self-attention
-            self_attention_input = self.layer_norm_3(ffn_1_out)
-            self_attention_out = self.dropout(
-                self.self_attention(self_attention_input, positions)
-            ) + ffn_1_out
+                gate = torch.sigmoid(
+                    self.gate_projections_attention[i](attention_input))
+                swish_output = F.silu(
+                    self.feature_projections_attention[i](attention_input))
+                attention_out = self.dropout(gate * swish_output) + attention_out
+
+        if self.use_positionwise_self_attention:
+            # Apply position-wise self-attention
+            pos_attention_input = self.layer_norm_4(attention_out)
+            pos_attention_out = self.dropout(
+                self.pos_self_attention(pos_attention_input, positions)
+            ) + attention_out
 
             # Apply second feed-forward layer
-            ffn_2_input = self.layer_norm_4(self_attention_out)
-            output = self.dropout(self.feed_forward_2(ffn_2_input)) + self_attention_out
+            ffn_2_input = self.layer_norm_5(pos_attention_out)
+            gate_2 = torch.sigmoid(self.gate_projection_2(ffn_2_input))
+            swish_output_2 = F.silu(self.feature_projection_2(ffn_2_input))
+            output = self.dropout(gate_2 * swish_output_2) + pos_attention_out
         else:
-            output = ffn_1_out
+            output = attention_out
 
         return output
 
-    def set_use_self_attention(self, use_self_attention):
-        self.use_self_attention = use_self_attention
+    def set_use_positionwise_self_attention(self, use_positionwise_self_attention):
+        self.use_positionwise_self_attention = use_positionwise_self_attention
 
-    def freeze_hyena(self):
-        for hyena in self.hyenas:
-            for param in hyena.parameters():
-                param.requires_grad = False
+    def set_freeze_state(self, freeze_hyena_layers=None, freeze_attention_layers=None):
+        """
+        Freeze or unfreeze layers selectively.
 
-        for layer_norm in self.layer_norms_hyena:
-            for param in layer_norm.parameters():
-                param.requires_grad = False
+        :param freeze_hyena_layers:
+            A list of indices for hyena layers to be frozen. If None, no hyena
+            layers are frozen.
+        :param freeze_attention_layers:
+            A list of indices for read-wise self-attention layers to be frozen.
+            If None, no attention layers are frozen.
+        """
+        # Freeze or unfreeze specified Hyena layers
+        if freeze_hyena_layers is not None:
+            for i in range(self.num_hyena):
+                requires_grad = i not in freeze_hyena_layers
+                for param in self.hyenas[i].parameters():
+                    param.requires_grad = requires_grad
+                for param in self.layer_norms_hyena[i].parameters():
+                    param.requires_grad = requires_grad
 
-        for param in self.feed_forward_1.parameters():
-            param.requires_grad = False
-
-        for param in self.layer_norm_2.parameters():
-            param.requires_grad = False
-
-    def unfreeze_hyena(self):
-        for hyena in self.hyenas:
-            for param in hyena.parameters():
-                param.requires_grad = True
-
-        for layer_norm in self.layer_norms_hyena:
-            for param in layer_norm.parameters():
-                param.requires_grad = True
-
-        for param in self.feed_forward_1.parameters():
-            param.requires_grad = True
-
-        for param in self.layer_norm_2.parameters():
-            param.requires_grad = True
-
+        # Freeze or unfreeze specified attention layers
+        if freeze_attention_layers is not None:
+            for i in range(self.num_attention):
+                requires_grad = i not in freeze_attention_layers
+                for param in self.read_self_attentions[i].parameters():
+                    param.requires_grad = requires_grad
+                for param in self.layer_norms_attention[i].parameters():
+                    param.requires_grad = requires_grad
+                for param in self.gate_projections_attention[i].parameters():
+                    param.requires_grad = requires_grad
+                for param in self.feature_projections_attention[i].parameters():
+                    param.requires_grad = requires_grad

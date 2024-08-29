@@ -33,8 +33,14 @@ class Module(nn.Module):
                 return value
             elif isinstance(value, Module):
                 return value.to(device)
+            elif isinstance(value, list):
+                # For a list of tensors (e.g., unbound filters)
+                for i in range(len(value)):
+                    value[i] = move_to_device(value[i], device)
+                return value
             else:
                 return value
+
 
         # Move all tensor attributes and submodules to the specified device
         for attr, value in self.__dict__.items():

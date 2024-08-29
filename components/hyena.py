@@ -37,9 +37,15 @@ class HyenaProjection(Module):
             self.groups * self.head_dim * num_heads,
             self.groups * self.head_dim * num_heads,
             kernel_size,
-            groups=self.groups * num_heads,
+            groups=self.groups * self.head_dim * num_heads,
             padding=kernel_size // 2
         )
+        # self.kernel_middle = kernel_size // 2
+        # self.register_buffer(
+        #     'kernel_mask',
+        #     torch.ones_like(self.conv.weight)
+        # )
+        # self.kernel_mask[:, :, self.kernel_middle] = 0.0
 
     def forward(self, inputs, positions):
         """
@@ -59,6 +65,7 @@ class HyenaProjection(Module):
         x = inputs.view(batch_size, seq_len, self.num_heads, self.head_dim)
         # Reshape for matrix multiplication and apply projection weights
         x = torch.einsum('bsgd,gdh->bsgh', x, self.W) + self.B
+        x = F.gelu(x)
         # Reshape for convolution
         x = x.reshape(
             batch_size, seq_len, self.num_heads * self.groups * self.head_dim
@@ -66,8 +73,16 @@ class HyenaProjection(Module):
         # (batch_size, num_heads*groups*head_dim, seq_len)
         x = x.transpose(1, 2)
 
+        # masked_weights = self.conv.weight * self.kernel_mask
         # Apply the convolution
         z = self.conv(x)
+
+        # z = F.conv1d(
+        #     x, masked_weights, bias=self.conv.bias, stride=self.conv.stride,
+        #     padding=self.conv.padding, dilation=self.conv.dilation,
+        #     groups=self.conv.groups
+        # )
+
         # Set the values at the padded positions to zero
         z = z * (positions != -1).unsqueeze(-2).to(torch.float32)
         # Reshape back to split heads and groups:
@@ -89,15 +104,16 @@ class FeedForward(Module):
         Dimension of the input embeddings.
     :param hidden_dim:
         Dimension of the hidden layer. If None, defaults to emb_dim.
-    :param n_order:
-        Number of orders for the output. Default is 1.
+    :param out_dim:
+        Dimension of the output layer. If None, defaults to emb_dim.
     :param activation:
         Activation function to use. Default is "gelu".
     """
-    def __init__(self, emb_dim, hidden_dim=None, n_order=1, activation="gelu"):
+
+    def __init__(self, emb_dim, hidden_dim=None, out_dim=None, activation="gelu"):
         super(FeedForward, self).__init__()
         self.emb_dim = emb_dim
-        self.n_order = n_order
+        self.out_dim = out_dim if out_dim is not None else emb_dim
         self.hidden_dim = hidden_dim if hidden_dim is not None else emb_dim
         self.W1 = nn.Parameter(
             nn.init.kaiming_uniform_(torch.randn(emb_dim, self.hidden_dim))
@@ -105,13 +121,13 @@ class FeedForward(Module):
         self.b1 = nn.Parameter(torch.zeros(self.hidden_dim))
         self.W2 = nn.Parameter(
             nn.init.kaiming_uniform_(
-                torch.randn(self.hidden_dim, n_order * emb_dim)
+                torch.randn(self.hidden_dim, self.out_dim)
             )
         )
-        self.b2 = nn.Parameter(torch.zeros(n_order * emb_dim))
+        self.b2 = nn.Parameter(torch.zeros(self.out_dim))
 
         # Initialise scaling vector
-        self.ff_scale = nn.Parameter(torch.ones(1, 1, n_order * emb_dim))
+        self.ff_scale = nn.Parameter(torch.ones(1, 1, self.out_dim))
 
         self.layer_norm = nn.LayerNorm(self.hidden_dim)
 
@@ -158,7 +174,7 @@ class FeedForward(Module):
         return x
 
 
-def sinusoidal_positional_encoding(positions, emb_dim, max_seq_length=256):
+def sinusoidal_positional_encoding(positions, emb_dim, max_seq_length=512):
     """
     Create sinusoidal positional encodings from a tensor of positions.
 
@@ -177,7 +193,7 @@ def sinusoidal_positional_encoding(positions, emb_dim, max_seq_length=256):
     position = positions.unsqueeze(-1)  # (batch_size, seq_len, 1)
     div_term = torch.exp(
         torch.arange(0, emb_dim, 2, device=positions.device, dtype=torch.float32) *
-        -(torch.log(torch.tensor(max_seq_length * 2.0)) / emb_dim)
+        -(torch.log(torch.tensor(seq_len * 4.0)) / emb_dim)
     )
 
     # Apply sine to even indices
@@ -202,8 +218,8 @@ class HyenaFilter(Module):
     """
 
     def __init__(
-            self, emb_dim, n_order, num_heads, max_seq_length=256,
-            k_gaussians=10, bias=1e-6
+            self, emb_dim, n_order, num_heads, max_seq_length=513,
+            bias=1e-9
     ):
         super(HyenaFilter, self).__init__()
         self.emb_dim = emb_dim
@@ -211,24 +227,32 @@ class HyenaFilter(Module):
         self.num_heads = num_heads
         self.head_dim = emb_dim // num_heads
         self.max_seq_length = max_seq_length
-        self.ffn = FeedForward(self.emb_dim, n_order=n_order, activation='sine')
-        self.group_weight = nn.Parameter(
-            torch.randn(n_order, num_heads, self.head_dim, self.head_dim)
+        self.midpoint = max_seq_length // 2
+        self.ffn = FeedForward(
+            self.emb_dim,
+            out_dim=self.emb_dim * self.n_order // self.head_dim,
+            activation='sine'
         )
-        self.group_bias = nn.Parameter(
-            torch.zeros(n_order, num_heads, self.head_dim)
-        )
-        self.K = k_gaussians
+        # self.group_weight = nn.Parameter(
+        #     torch.randn(n_order, num_heads, self.head_dim, self.head_dim)
+        # )
+        # self.group_bias = nn.Parameter(
+        #     torch.zeros(n_order, num_heads, self.head_dim)
+        # )
+        # self.K = k_gaussians
 
-        self.epsilon = 1e-8  # Small value to avoid division by zero
+        self.epsilon = 1e-9  # Small value to avoid division by zero
 
-        # Initialize the Gaussian mixture parameters
-        # mu and sigma will have dimensions (n_order, num_heads, K, 1)
-        self.mu = nn.Parameter(torch.rand(n_order, num_heads, self.K, 1))
-        self.sigma = nn.Parameter(
-            torch.rand(n_order, num_heads, self.K, 1) * 20.0
+        self.alpha = nn.Parameter(torch.randn(n_order, num_heads, 1, 1))
+        self.register_buffer(
+            'positions',
+            torch.arange(max_seq_length).float().view(1, 1, 1, -1)
         )
-        self.weights = nn.Parameter(torch.rand(n_order, num_heads, self.K, 1))
+        self.register_buffer(
+            'centre_mask',
+            torch.zeros(n_order, num_heads, 1, 1)
+        )
+
         self.bias = bias
 
     def forward(self, positional_encodings):
@@ -246,37 +270,38 @@ class HyenaFilter(Module):
         seq_length, emb_dim = positional_encodings.shape
         # positional_encodings = positional_encodings.view(1, seq_length, self.num_heads, self.head_dim)
         # Apply the feed-forward network with sine activation
-        h_hat = self.ffn(positional_encodings).view(
-            seq_length, self.n_order, self.num_heads, self.head_dim
-        )
+        h_hat = self.ffn(positional_encodings).view(1, seq_length, self.n_order, self.num_heads)
+
+        # .view(
+        #     seq_length, self.n_order, self.num_heads, self.head_dim
+        # ))
 
         # Apply group weights and biases
-        h_hat = torch.einsum(
-            'lohd,ohdj->lohj', h_hat, self.group_weight
-        ) + self.group_bias
+        # h_hat = torch.einsum('lohd,ohdj->lohj', h_hat, self.group_weight) + self.group_bias
 
         # Reorder to shape (n_order, num_heads, head_dim, seq_length)
-        h_hat = h_hat.permute(1, 2, 3, 0)
+        h_hat = h_hat.permute(2, 3, 0, 1)
 
-        # Normalize h_hat along the channel dimension
-        h_hat = h_hat / (h_hat.norm(p=1, dim=-2, keepdim=True) + self.epsilon)
+        # With 1 diemsnion there is no need to normalise across the channel
+        # dimension as this is one.
+        # Normalise h_hat along the channel dimension
+        # h_hat = h_hat / (h_hat.norm(p=1, dim=-2, keepdim=True) + self.epsilon)
 
-        # Apply each order's Gaussian window to their respective filters
-        seq_length = h_hat.size(-1)
-        positions = torch.arange(seq_length).float().view(1, 1, 1, -1).to(
-            positional_encodings.device
+        alpha = F.softplus(self.alpha)
+
+        window = torch.cat(
+            [
+                torch.exp(-alpha * (self.midpoint - self.positions[..., :self.midpoint])),
+                self.centre_mask,
+                torch.exp(-alpha * (self.positions[..., self.midpoint + 1:] - self.midpoint))
+            ], dim=-1
         )
-        gaussian_windows = torch.exp(
-            -0.5 * (
-                    (positions - self.mu * self.max_seq_length) / self.sigma
-            ) ** 2
-        )
-        weighted_gaussian_windows = (gaussian_windows * self.weights).sum(dim=-2)
-        # Apply windowing and bias to filters
-        h_hat = h_hat * (weighted_gaussian_windows + self.bias).unsqueeze(-2)
 
-        # Split h_hat into h1, h2, ..., hN, where each has shape
-        # (batch_size, num_heads, head_dim, seq_length)
+        h_hat = h_hat * window
+
+        # expand so each head dim has the same filter
+        h_hat = h_hat.expand(-1, -1, self.head_dim, -1)
+
         return h_hat.unbind(dim=0)
 
 
@@ -303,38 +328,36 @@ class FFTLongConv(Module):
         :return:
             Convolution result tensor of shape (batch_size, num_heads, head_dim, seq_length).
         """
-        batch_size, num_heads, head_dim, seq_length = inputs.shape
+        batch_size, num_heads, head_dim, input_length = inputs.shape
 
         # Ensure filters have the correct shape
-        # (num_heads, 1, head_dim, seq_length)
-        filters = filters[..., :seq_length].unsqueeze(0)
-        # Prepare inputs for FFT
-        padded_length = 2 * seq_length  # Double the length for FFT
-        padded_inputs = F.pad(inputs, (0, padded_length - seq_length))
-        filters = F.pad(filters, (0, padded_length - seq_length))
+        filters = filters.unsqueeze(0)
+        # Filters are twice the length of the input so the input must be padded
+        # to prevent circular convolution.
+        filter_length = filters.shape[-1]
+        padding = filter_length + 1 - input_length
+        padded_inputs = F.pad(inputs, (0, padding))
 
         # Perform FFT
-        padded_inputs = torch.fft.rfft(
-            padded_inputs, n=padded_length, dim=-1, norm='forward'
-        )
-        filters = torch.fft.rfft(
-            filters, n=padded_length, dim=-1, norm='forward'
-        )
-
+        padded_length = padded_inputs.shape[-1]
+        padded_inputs = torch.fft.rfft(padded_inputs, n=padded_length, dim=-1, norm='forward')
+        filters = torch.fft.rfft(filters, n=padded_length, dim=-1, norm='forward')
+        # padded_inputs = torch.fft.rfft2(padded_inputs, s=(head_dim, padded_length), dim=(-2, -1), norm='forward')
+        # filters = torch.fft.rfft2(filters, s=(head_dim, padded_length), dim=(-2, -1), norm='forward')
         # Element-wise multiplication in the frequency domain
         padded_inputs.mul_(filters)
 
         # Inverse FFT to get the convolution result
-        result = torch.fft.irfft(
-            padded_inputs, n=padded_length, dim=-1, norm='forward'
-        )
-        # Remove padding
-        result = result[..., :seq_length] + inputs * bias
+        result = torch.fft.irfft(padded_inputs, n=padded_length, dim=-1, norm='forward')
+        # result = torch.fft.irfft2(padded_inputs, s=(head_dim, padded_length), dim=(-2, -1), norm='forward')
 
-        # Zero out the padded positions. These positions do not represent
-        # nucleotides and should not contribute to the convolution result.
-        result = result * (positions != -1).unsqueeze(1).unsqueeze(1).to(
-            torch.float32
-        )
+        # Remove padding by slicing out the central portion of the result
+        result = result[..., :input_length] + (inputs * bias)
+
+        # result = F.gelu(result)
+
+        # Zero out the padded positions that do not represent nucleotides
+        result = result * (positions != -1).unsqueeze(1).unsqueeze(1).to(torch.float32)
 
         return result
+

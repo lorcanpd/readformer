@@ -4,10 +4,11 @@ from torch.optim import Optimizer
 class LAMB(Optimizer):
     def __init__(
             self, params, lr=1e-3, betas=(0.9, 0.999), eps=1e-6, weight_decay=0,
-            adam=True, adaptive_noise=False, use_curvature=False, noise_std=0.01
+            adam=True, adaptive_noise=False, use_curvature=False, noise_std=0.01,
+            sharpness_aware=False, rho=0.05
     ):
         """
-        LAMB optimiser with optional adaptive gradient noise.
+        LAMB optimiser with optional adaptive gradient noise and sharpness-aware minimization.
 
         :param params:
             Model parameters.
@@ -25,15 +26,18 @@ class LAMB(Optimizer):
         :param adaptive_noise:
             If True, add adaptive gradient noise.
         :param use_curvature:
-            If True, scale the noise based on curvature (second-moment
-            statistics).
+            If True, scale the perturbation/noise based on curvature (second-moment statistics).
         :param noise_std:
             Standard deviation for the Gaussian noise (base noise level).
+        :param sharpness_aware:
+            If True, apply sharpness-aware minimization (SAM).
+        :param rho:
+            SAM perturbation factor, controlling the size of the worst-case scenario.
         """
         defaults = dict(
             lr=lr, betas=betas, eps=eps, weight_decay=weight_decay, adam=adam,
             adaptive_noise=adaptive_noise, use_curvature=use_curvature,
-            noise_std=noise_std
+            noise_std=noise_std, sharpness_aware=sharpness_aware, rho=rho
         )
         super(LAMB, self).__init__(params, defaults)
 
@@ -56,7 +60,7 @@ class LAMB(Optimizer):
 
                 state = self.state[p]
 
-                # State initialisation
+                # State initialization
                 if len(state) == 0:
                     state['step'] = 0
                     state['exp_avg'] = torch.zeros_like(p.data)
@@ -90,6 +94,26 @@ class LAMB(Optimizer):
                     noise = torch.randn_like(grad) * noise_std
 
                     grad.add_(noise)
+
+                # If sharpness-aware minimization (SAM) is enabled
+                if group['sharpness_aware']:
+                    # Step 1: Calculate the perturbation based on the gradient norm (not curvature)
+                    grad_norm = grad.norm(p=2)
+                    scale = group['rho'] / (grad_norm + group['eps'])
+                    perturbation = grad * scale
+
+                    # Apply the perturbation to the weights
+                    p.add_(perturbation)
+
+                    # Recompute the gradients with perturbed weights
+                    if closure is not None:
+                        with torch.enable_grad():
+                            closure()
+
+                    grad = p.grad.data
+
+                    # Remove the perturbation
+                    p.sub_(perturbation)
 
                 # Decay the first and second moment running average coefficient
                 exp_avg.mul_(beta1).add_(grad, alpha=1 - beta1)
