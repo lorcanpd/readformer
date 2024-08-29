@@ -108,10 +108,10 @@ EOF
     )
 
     if [[ $? -ne 0 ]]; then
-      echo "Error submitting readformer job with a kernel size of ${KERNEL_SIZE}"
+      echo "Error submitting readformer job with ${NUM_LAYERS} layers, ${NUM_HYENA} hyenas, ${NUM_ATTENTION} attention layers with ${EMB_DIM} emb dim and ${NUM_HEADS} heads"
       exit 1
     fi
 
-    echo "Submitted readformer job ${job_id} with a kernel size of ${KERNEL_SIZE}"
+    echo "Submitted readformer job ${job_id} with ${NUM_LAYERS} layers, ${NUM_HYENA} hyenas, ${NUM_ATTENTION} attention layers with ${EMB_DIM} emb dim and ${NUM_HEADS} heads"
   done
 done
