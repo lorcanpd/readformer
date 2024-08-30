@@ -18,7 +18,7 @@ MEMORY=32768
 MAX_ITERS=10000
 CORES=12
 #NUM_HYENA=3
-#NUM_ORDER=2
+NUM_ORDER=2
 #NUM_HEADS=8
 KERNEL_SIZE=7
 NUM_LAYERS=1
@@ -35,8 +35,8 @@ MIXING_ALPHA=0.2
 MAIN_LR=0.005
 
 # Outer loop params.
-EMB_DIMS=( 64 128 256 )
-HEAD_NUMS=( 8 8 16 )
+EMB_DIMS=( 128 256 )
+HEAD_NUMS=( 8 16 )
 
 # Inner loop params.
 LAYER_NUMS=( 1 1 1 1 2 )
@@ -44,6 +44,7 @@ NUM_HYENAS=( 6 0 5 4 2 )
 NUM_ATTENS=( 0 6 1 2 1 )
 
 NAME="striped_hyena_ablations"
+
 
 for i in "${!EMB_DIMS[@]}"; do
   EMB_DIM=${EMB_DIMS[$i]}
@@ -57,6 +58,7 @@ for i in "${!EMB_DIMS[@]}"; do
 #!/bin/bash
 #BSUB -J ${NAME}
 #BSUB -q gpu-basement
+#BSUB -m "farm22-gpu0203"
 #BSUB -o ${LOG_DIR}/${NAME}_%J.out
 #BSUB -e ${LOG_DIR}/${NAME}_%J.err
 #BSUB -M ${MEMORY}

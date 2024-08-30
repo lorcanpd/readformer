@@ -80,7 +80,7 @@ def calculate_perplexity(logits, targets):
         Perplexity score (scalar).
     """
     # Compute negative log-likelihood loss (cross-entropy)
-    nll_loss = F.cross_entropy(logits, targets, reduction='mean')
+    nll_loss = F.cross_entropy(logits, targets.long(), reduction='mean')
 
     # Calculate perplexity
     perplexity = torch.exp(nll_loss)
