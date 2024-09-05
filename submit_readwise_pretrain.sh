@@ -15,35 +15,59 @@ MODEL_DIR="/lustre/scratch126/casm/team274sb/lp23/readformer/models/read_only_pr
 VAL_BATCH_DIR="/lustre/scratch126/casm/team274sb/lp23/readformer/data/validation_batch"
 GPU_MEMORY=80000
 MEMORY=32768
-MAX_ITERS=10000
+MAX_ITERS=50000
 CORES=12
 #NUM_HYENA=3
 NUM_ORDER=2
 #NUM_HEADS=8
 KERNEL_SIZE=7
-NUM_LAYERS=1
+#NUM_LAYERS=1
 MIN_READ_QUALITY=15
-BATCH_SIZE=1024
+BATCH_SIZE=128
 #EMB_DIM=64
 MAX_SEQUENCE_LENGTH=256  # Single reads
 WARM_UP_EPOCHS=2
 #EPOCHS_AT_INTERVAL=1
-ITERS_IN_EPOCH=1000
+ITERS_IN_EPOCH=2000
 CORRUPTION_RATE=0.15
 PROPORTION_RANDOM=0.1
 MIXING_ALPHA=0.2
-MAIN_LR=0.005
-
+MAIN_LR=0.0025
+# First runs  batch size 1024 - 32 sets of 32 reads
 # Outer loop params.
-EMB_DIMS=( 128 256 )
-HEAD_NUMS=( 8 16 )
+#EMB_DIMS=( 128 256 )
+#HEAD_NUMS=( 8 16 )
 
 # Inner loop params.
-LAYER_NUMS=( 1 1 1 1 2 )
-NUM_HYENAS=( 6 0 5 4 2 )
-NUM_ATTENS=( 0 6 1 2 1 )
+#LAYER_NUMS=( 1 1 1 1 2 )
+#NUM_HYENAS=( 6 0 5 4 2 )
+#NUM_ATTENS=( 0 6 1 2 1 )
 
-NAME="striped_hyena_ablations"
+# Second runs batch size 1024 - 16 sets of 32 reads
+#EMB_DIMS=( 128 256 )
+#HEAD_NUMS=( 8 16 )
+#
+#LAYER_NUMS=( 1 1 2 )
+#NUM_HYENAS=( 6 7 3 )
+#NUM_ATTENS=( 2 1 1 )
+
+# Third runs batch size 512
+#EMB_DIMS=( 128 256 )
+#HEAD_NUMS=( 8 16 )
+#
+#LAYER_NUMS=( 1  2 2 2 2 )
+#NUM_HYENAS=( 12 4 5 6 7 )
+#NUM_ATTENS=( 0  2 1 2 1 )
+
+# Fourth runs batch size 128
+EMB_DIMS=( 128 256 512 )
+HEAD_NUMS=( 8 16 32 )
+
+LAYER_NUMS=(  1 3 3 3 4 )
+NUM_HYENAS=( 24 5 6 7 5 )
+NUM_ATTENS=(  0 1 2 1 1 )
+
+NAME="deep_striped_hyena_ablations_bs_128"
 
 
 for i in "${!EMB_DIMS[@]}"; do
@@ -53,14 +77,14 @@ for i in "${!EMB_DIMS[@]}"; do
     NUM_LAYERS=${LAYER_NUMS[$j]}
     NUM_HYENA=${NUM_HYENAS[$j]}
     NUM_ATTENTION=${NUM_ATTENS[$j]}
-
+    JOBNAME="${NAME}_${NUM_LAYERS}l_${NUM_HYENA}h_${NUM_ATTENTION}a_${EMB_DIM}d_${NUM_HEADS}h"
     job_id=$(bsub << EOF | grep -oE "[0-9]+"
 #!/bin/bash
-#BSUB -J ${NAME}
+#BSUB -J ${JOBNAME}
 #BSUB -q gpu-basement
 #BSUB -m "farm22-gpu0203"
-#BSUB -o ${LOG_DIR}/${NAME}_%J.out
-#BSUB -e ${LOG_DIR}/${NAME}_%J.err
+#BSUB -o ${LOG_DIR}/${JOBNAME}_%J.out
+#BSUB -e ${LOG_DIR}/${JOBNAME}_%J.err
 #BSUB -M ${MEMORY}
 #BSUB -n ${CORES}
 #BSUB -gpu "num=1:mode=exclusive_process:j_exclusive=yes:block=yes:gmem=${GPU_MEMORY}"
@@ -104,6 +128,7 @@ singularity exec --nv \
     --max_iters ${MAX_ITERS} \
     --mixing_alpha ${MIXING_ALPHA} \
     --validation_dir /nst_dir \
+    --adam \
     --wandb
 
 EOF

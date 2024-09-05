@@ -9,6 +9,7 @@ class LAMB(Optimizer):
     ):
         """
         LAMB optimiser with optional adaptive gradient noise and sharpness-aware minimization.
+        Now uses decoupled weight decay as in AdamW.
 
         :param params:
             Model parameters.
@@ -124,8 +125,9 @@ class LAMB(Optimizer):
                 # Compute the ratio for LAMB
                 update = exp_avg / denom
 
+                # Apply decoupled weight decay as in AdamW
                 if group['weight_decay'] != 0:
-                    update.add_(p.data, alpha=group['weight_decay'])
+                    p.data.mul_(1 - group['lr'] * group['weight_decay'])
 
                 r1 = p.data.norm(p=2)
                 r2 = update.norm(p=2)
@@ -135,7 +137,7 @@ class LAMB(Optimizer):
                 else:
                     trust_ratio = r1 / r2
 
-                # Apply weight decay and update with trust ratio
+                # Apply the update
                 if group['adam']:
                     p.data.add_(update, alpha=-group['lr'])
                 else:

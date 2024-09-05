@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.optim import AdamW
 import numpy as np
 # import torch.nn as nn
 from torch.optim.lr_scheduler import OneCycleLR
@@ -161,6 +162,10 @@ def get_args():
     parser.add_argument(
         '--validation_dir', type=str, required=True,
         help='Directory containing saved validation tensors.'
+    )
+    parser.add_argument(
+        '--adam', action='store_true',
+        help='Use Adam optimizer instead of LAMB.'
     )
 
     args = parser.parse_args()
@@ -359,6 +364,7 @@ def main():
             "proportion_random_replacement": proportion_random,
             "learning_rate_main": main_lr,
             "mixing_alpha": mixing_alpha,
+            "optimiser": "LAMB" if not args.adam else "Adam",
         })
 
     mask_rate = 1.0 - 2 * proportion_random
@@ -395,11 +401,16 @@ def main():
     # optimiser = torch.optim.Adam(
     #     params, lr=main_lr,
     # )
-    optimiser = LAMB(
-        params, lr=main_lr, eps=1e-9, weight_decay=0.05, adam=False,
-        adaptive_noise=True, noise_std=0.1, use_curvature=True,
-        # sharpness_aware=True, rho=0.03
-    )
+    if not args.adam:
+        optimiser = LAMB(
+            params, lr=main_lr, eps=1e-9, weight_decay=0.05, adam=False,
+            adaptive_noise=True, noise_std=0.1, use_curvature=True,
+            # sharpness_aware=True, rho=0.03
+        )
+    else:
+        optimiser = AdamW(
+            params, lr=main_lr, eps=1e-9, weight_decay=0.05
+        )
     scheduler = OneCycleLR(
         optimiser, max_lr=main_lr, total_steps=args.max_iters,
         pct_start=0.3, anneal_strategy='cos', cycle_momentum=False
@@ -430,7 +441,7 @@ def main():
 
     # logging.info(f"Number of intervals: {len(intervals)}")
 
-    contrastive_denominator = 2
+    contrastive_denominator = 1
     # logging.info(f"Training for interval {interval}")
     data_loader = create_data_loader(
         file_paths=data_dir,
