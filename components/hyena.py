@@ -213,7 +213,6 @@ class HyenaFilter(Module):
     :param n_order: Number of orders for the filter.
     :param num_heads: Number of heads for multi-head support.
     :param max_seq_length: Maximum sequence length for positional encodings.
-    :param k_gaussians: Number of Gaussian mixtures for windowing.
     :param bias: Small bias to avoid division by zero.
     """
 
@@ -360,4 +359,3 @@ class FFTLongConv(Module):
         result = result * (positions != -1).unsqueeze(1).unsqueeze(1).to(torch.float32)
 
         return result
-

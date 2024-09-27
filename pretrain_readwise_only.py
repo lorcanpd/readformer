@@ -413,7 +413,7 @@ def main():
         )
     scheduler = OneCycleLR(
         optimiser, max_lr=main_lr, total_steps=args.max_iters,
-        pct_start=0.3, anneal_strategy='cos', cycle_momentum=False
+        pct_start=0.0, anneal_strategy='cos', cycle_momentum=False
     )
 
     loss_fn = MLMLoss()
