@@ -44,6 +44,7 @@ class BAMReadDataset(Dataset):
     A PyTorch Dataset to manage randomly selecting a genomic position and
     sampling reads from BAM files.
     """
+
     def __init__(
             self, file_paths, metadata_path, nucleotide_threshold,
             max_sequence_length, selected_positions=False, min_quality=0
@@ -96,11 +97,18 @@ class BAMReadDataset(Dataset):
                 logging.error(f"Error extracting reads: {e}")
                 retries += 1
                 continue
+
             if read_dict:
-                read_info = get_read_info(read_dict)
+                try:
+                    read_info = get_read_info(read_dict)
+                except TypeError as e:
+                    logging.error(f"Error getting read info: {e}")
+                    retries += 1
+                    continue
                 break
             retries += 1
-        else:
+
+        if retries == max_retries:
             logging.warning("Max retries reached, returning None")
             return None
 
@@ -135,7 +143,7 @@ class BAMReadDataset(Dataset):
         read_qualities += [0.0] * padding_length
         cigar_match += [0.0] * padding_length
         cigar_insertion += [0.0] * padding_length
-        bitwise_flags += [[0.0]*12] * padding_length
+        bitwise_flags += [[0.0] * 12] * padding_length
         positions += [-1] * padding_length
 
         logging.debug(
