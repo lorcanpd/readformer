@@ -871,7 +871,7 @@ def main():
 
         # i += 1
 
-        if i % iters_in_epoch == 0 | i == args.max_iters:
+        if i % iters_in_epoch == 0 or i == args.max_iters:
             mean_loss = sum(epoch_losses) / len(epoch_losses)
 
             if args.wandb:

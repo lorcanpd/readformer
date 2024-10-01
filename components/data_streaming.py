@@ -101,11 +101,11 @@ class BAMReadDataset(Dataset):
             if read_dict:
                 try:
                     read_info = get_read_info(read_dict)
+                    break
                 except TypeError as e:
                     logging.error(f"Error getting read info: {e}")
                     retries += 1
                     continue
-                break
             retries += 1
 
         if retries == max_retries:

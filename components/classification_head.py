@@ -249,4 +249,36 @@ class MLMClassifier(Module):
         return logits
 
 
+class BetaDistributionClassifier(nn.Module):
+    """
+    A classification layer that learns the alpha and beta parameters of
+    a Beta distribution, representing aleatoric uncertainty, and captures
+    epistemic uncertainty using Monte Carlo Dropout.
+    """
+    def __init__(self, input_dim, hidden_dim, dropout_rate=0.1):
+        super(BetaDistributionClassifier, self).__init__()
+
+        self.fc1 = nn.Linear(input_dim, hidden_dim)
+        self.dropout = nn.Dropout(dropout_rate)
+        self.fc_alpha = nn.Linear(hidden_dim, 1)
+        self.fc_beta = nn.Linear(hidden_dim, 1)
+
+    def forward(self, x):
+        x = F.relu(self.fc1(x))
+        x = self.dropout(x)
+        alpha = F.softplus(self.fc_alpha(x)) + 1e-9
+        beta = F.softplus(self.fc_beta(x)) + 1e-9
+        return alpha, beta
+
+
+def beta_nll_loss(alpha, beta, y_true, eps=1e-9):
+    """
+    Compute the negative log likelihood (NLL) of the true label y_true under the
+    predicted Beta distribution defined by parameters alpha and beta.
+    """
+    y_true = y_true.clamp(eps, 1 - eps)  # Avoid log(0)
+    log_prob = torch.lgamma(alpha + beta) - torch.lgamma(alpha) - torch.lgamma(beta)
+    log_prob += (alpha - 1) * torch.log(y_true) + (beta - 1) * torch.log(1 - y_true)
+    nll = -log_prob
+    return nll.sum()
 
