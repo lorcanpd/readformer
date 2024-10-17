@@ -37,6 +37,75 @@ def estimate_initial_window(
     return int(estimated_needed_window)
 
 
+def extract_single_read_from_position(
+        bam_file_path: str,
+        chromosome: str,
+        position: int,
+        min_quality: int = 0
+) -> dict:
+    """
+    Extract a single read from a BAM file starting at a given position.
+
+    :param bam_file_path:
+        Path to the BAM file.
+    :param chromosome:
+        Chromosome name.
+    :param position:
+        Starting genomic position (0-based).
+    :param min_quality:
+        Minimum mapping quality threshold.
+
+    :return:
+        A dictionary containing information about the extracted read.
+        Returns None if no read meets the criteria.
+    """
+
+    bam_file = pysam.AlignmentFile(bam_file_path, "rb")
+    fetched_read = None
+
+    # Adjust chromosome name if necessary
+    adjusted_chromosome = chromosome
+    if chromosome not in bam_file.references:
+        if chromosome.startswith("chr"):
+            adjusted_chromosome = chromosome[3:]  # Try without 'chr'
+        else:
+            adjusted_chromosome = "chr" + chromosome  # Try with 'chr'
+        if adjusted_chromosome not in bam_file.references:
+            bam_file.close()
+            raise ValueError(
+                f"Chromosome {adjusted_chromosome} not found in the BAM file."
+            )
+
+    try:
+        iter_reads = bam_file.fetch(adjusted_chromosome, position)
+    except ValueError as e:
+        bam_file.close()
+        raise ValueError(
+            f"Error fetching reads from {adjusted_chromosome}:{position} - {e}"
+        )
+
+    fetched_reads = {}
+
+    for read in iter_reads:
+        if read.mapping_quality < min_quality:
+            continue
+
+        fetched_reads[read.query_name] = {
+            "bitwise_flags": read.flag,
+            "reference_start": read.reference_start,
+            "mapping_quality": read.mapping_quality,
+            "cigar": read.cigarstring,
+            "template_length": read.template_length,
+            "query_sequence": read.query_sequence,
+            "query_qualities": read.query_qualities,
+            "tags": read.tags
+        }
+        break  # Stop after fetching the first suitable read
+
+    bam_file.close()
+    return fetched_reads
+
+
 def extract_reads_from_position_onward(
         bam_file_path, chromosome, position, nucleotide_threshold, min_quality=0
 ) -> dict:

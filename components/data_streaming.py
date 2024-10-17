@@ -5,7 +5,7 @@ import pandas as pd
 import torch
 from torch.utils.data import Dataset, DataLoader, Sampler, get_worker_info
 from components.extract_reads import (
-    extract_reads_from_position_onward, sample_positions, get_read_info
+    extract_single_read_from_position, sample_positions, get_read_info
 )
 import multiprocessing as mp
 import logging
@@ -89,9 +89,13 @@ class BAMReadDataset(Dataset):
         while retries < max_retries:
             positions = sample_positions(1, sex)
             try:
-                read_dict = extract_reads_from_position_onward(
+                # read_dict = extract_reads_from_position_onward(
+                #     file_path, 'chr' + positions[0][0], positions[0][1],
+                #     self.nucleotide_threshold, self.min_quality
+                # )
+                read_dict = extract_single_read_from_position(
                     file_path, 'chr' + positions[0][0], positions[0][1],
-                    self.nucleotide_threshold, self.min_quality
+                    self.min_quality
                 )
             except Exception as e:
                 logging.error(f"Error extracting reads: {e}")

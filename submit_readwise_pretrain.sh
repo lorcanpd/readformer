@@ -10,7 +10,7 @@ READFORMER_DIR="/lustre/scratch126/casm/team274sb/lp23/readformer/readformer"
 WANDB_API_KEY_PATH="/lustre/scratch126/casm/team274sb/lp23/.wandb_api"
 SIF="/nfs/users/nfs_l/lp23/sifs/readformer.sif"
 DATA_DIR="/lustre/scratch126/casm/team274sb/lp23/readformer/data/pretrain_bams"
-METADATA_PATH="/lustre/scratch126/casm/team274sb/lp23/readformer/data/pretraining_ten_bams.csv"
+METADATA_PATH="/lustre/scratch126/casm/team274sb/lp23/readformer/data/pretrain_subsample_metadata.csv"
 MODEL_DIR="/lustre/scratch126/casm/team274sb/lp23/readformer/models/read_only_pretrain"
 VAL_BATCH_DIR="/lustre/scratch126/casm/team274sb/lp23/readformer/data/validation_batch_128"
 GPU_MEMORY=80000
@@ -22,10 +22,10 @@ NUM_ORDER=2
 #NUM_HEADS=8
 KERNEL_SIZE=7
 #NUM_LAYERS=1
-MIN_READ_QUALITY=15
+MIN_READ_QUALITY=20
 BATCH_SIZE=128
 #EMB_DIM=64
-MAX_SEQUENCE_LENGTH=256  # Single reads
+MAX_SEQUENCE_LENGTH=160  # Single reads
 WARM_UP_EPOCHS=2
 #EPOCHS_AT_INTERVAL=1
 ITERS_IN_EPOCH=10000
@@ -67,13 +67,13 @@ MAIN_LR=0.0025
 #NUM_HYENAS=( 24 5 6 7 5 )
 #NUM_ATTENS=(  0 1 2 1 1 )
 
-NAME="final_readwise_pretrain"
+NAME="final_pretrain"
 
-EMB_DIMS=( 256 512 )
-HEAD_NUMS=( 16 32 )
-LAYER_NUMS=( 3 4 )
-NUM_HYENAS=( 6 5 )
-NUM_ATTENS=( 2 1 )
+EMB_DIMS=( 256 512 256 512 )
+HEAD_NUMS=( 16  32  16  32 )
+LAYER_NUMS=( 3   4   1   1 )
+NUM_HYENAS=( 6   5   0  24 )
+NUM_ATTENS=( 2   1  24   0 )
 
 
 for i in "${!EMB_DIMS[@]}"; do
