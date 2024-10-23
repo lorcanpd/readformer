@@ -173,19 +173,22 @@ def get_args():
 
 
 def load_checkpoint(
-        model_dir, model_name, model, classifier, nucleotide_embeddings,
+        # model_dir, model_name,
+        checkpoint_path,
+        model, classifier, nucleotide_embeddings,
         # float_metric_embeddings, binary_metric_embeddings,
         metric_embeddings,
         optimiser
 ):
-    checkpoint_path = os.path.join(model_dir, model_name)
+    # checkpoint_path = os.path.join(model_dir, model_name)
+
     if os.path.isfile(checkpoint_path):
         checkpoint = torch.load(checkpoint_path)
         model.load_state_dict(checkpoint['model_state_dict'])
         classifier.load_state_dict(checkpoint['classifier_state_dict'])
         nucleotide_embeddings.load_state_dict(checkpoint['nucleotide_embeddings_state_dict'])
         metric_embeddings.load_state_dict(checkpoint['metric_embeddings_state_dict'])
-        optimiser.load_state_dict(checkpoint['optimizer_state_dict'])
+        optimiser.load_state_dict(checkpoint['optimiser_state_dict'])
         epoch = checkpoint['epoch']
         mean_loss = checkpoint['mean_loss']
         i = checkpoint.get('i', None)
@@ -408,7 +411,9 @@ def main():
 
     if args.load_latest_checkpoint:
         epoch, best_mean_loss, i, run_id = load_checkpoint(
-            args.model_dir, args.name, readformer, classifier,
+            # args.model_dir, name,
+            checkpoint_path,
+            readformer, classifier,
             nucleotide_embeddings,
             metric_embeddings,
             optimiser
@@ -418,6 +423,7 @@ def main():
             # Raise an error
             raise FileNotFoundError("No checkpoint found.")
         else:
+            # pass
             if run_id is None:
                 if (emb_dim == 256 and num_heads == 16 and num_layers == 3 and
                         num_hyena == 6 and num_attention == 2):
