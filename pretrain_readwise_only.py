@@ -392,10 +392,7 @@ def main():
         optimiser = AdamW(
             params, lr=main_lr, eps=1e-9, weight_decay=0.05
         )
-    scheduler = OneCycleLR(
-        optimiser, max_lr=main_lr, total_steps=args.max_iters,
-        pct_start=0.3, anneal_strategy='cos', cycle_momentum=False
-    )
+
 
     loss_fn = MLMLoss()
     metric_loss_fn = nn.BCEWithLogitsLoss(reduction='sum')
@@ -404,13 +401,15 @@ def main():
     # intervals = create_intervals(max_sequence_length, 256)
 
     i = 0
+    last_step = i
     # j = 0
     epoch = 0
     epoch_losses = []
     best_mean_loss = float('inf')
 
     if args.load_latest_checkpoint:
-        epoch, best_mean_loss, i, run_id = load_checkpoint(
+        epoch, best_mean_loss, i, _ = load_checkpoint(
+        # epoch, best_mean_loss, i, run_id = load_checkpoint(
             # args.model_dir, name,
             checkpoint_path,
             readformer, classifier,
@@ -424,23 +423,24 @@ def main():
             raise FileNotFoundError("No checkpoint found.")
         else:
             # pass
-            if run_id is None:
-                if (emb_dim == 256 and num_heads == 16 and num_layers == 3 and
-                        num_hyena == 6 and num_attention == 2):
-                    run_id = "27a83d0p"
-                elif (emb_dim == 512 and num_heads == 32 and num_layers == 4 and
-                        num_hyena == 5 and num_attention == 1):
-                    run_id = "nzdbe8fs"
-                elif (emb_dim == 256 and num_heads == 16 and num_layers == 1 and
-                        num_hyena == 0 and num_attention == 24):
-                    run_id = "mlz3orlu"
-                else:
-                    logging.error(
-                        "Run ID is not specified for these parameters.")
-                    raise ValueError(
-                        "Run ID not found for the current model configuration.")
+            # if run_id is None:
+            # if (emb_dim == 256 and num_heads == 16 and num_layers == 3 and
+            #         num_hyena == 6 and num_attention == 2):
+            #     run_id = "27a83d0p"
+            # elif (emb_dim == 512 and num_heads == 32 and num_layers == 4 and
+            #         num_hyena == 5 and num_attention == 1):
+            #     run_id = "nzdbe8fs"
+            # elif (emb_dim == 256 and num_heads == 16 and num_layers == 1 and
+            #         num_hyena == 0 and num_attention == 24):
+            #     run_id = "mlz3orlu"
+            # else:
+            #     logging.error(
+            #         "Run ID is not specified for these parameters.")
+            #     raise ValueError(
+            #         "Run ID not found for the current model configuration.")
 
-            i = epoch * iters_in_epoch
+            last_step = i
+            i = i + 1
     else:
         logging.info("Training from scratch.")
         run_id = None
@@ -469,11 +469,21 @@ def main():
                 "mixing_alpha": mixing_alpha,
                 "optimiser": "LAMB" if not args.adam else "Adam",
             },
-            resume='allow',
-            id=run_id
+            resume=False,
+            # id=run_id
         )
-        if run_id is None:
-            run_id = wandb.run.id
+        run_id = wandb.run.id
+    if args.load_latest_checkpoint:
+        scheduler = OneCycleLR(
+            optimiser, max_lr=main_lr, total_steps=args.max_iters,
+            pct_start=0.3, anneal_strategy='cos', cycle_momentum=False,
+            last_epoch=last_step
+        )
+    else:
+        scheduler = OneCycleLR(
+            optimiser, max_lr=main_lr, total_steps=args.max_iters,
+            pct_start=0.3, anneal_strategy='cos', cycle_momentum=False
+        )
 
     # logging.info(f"Number of intervals: {len(intervals)}")
 
@@ -920,7 +930,7 @@ def main():
                 )
 
             if i > 0:
-                torch.save({
+                update = {
                     'epoch': epoch,
                     'model_state_dict': readformer.state_dict(),
                     'classifier_state_dict': classifier.state_dict(),
@@ -935,10 +945,12 @@ def main():
                     #     binary_metric_embeddings.state_dict(),
                     'optimiser_state_dict': optimiser.state_dict(),
                     'mean_loss': mean_loss,
-                    'wandb_run_id': run_id,
                     'i': i,
                     # 'j': j
-                }, checkpoint_path)
+                }
+                if args.wandb:
+                    update['wandb_run_id'] = run_id
+                torch.save(update, checkpoint_path)
                 if args.wandb:
                     wandb.save(checkpoint_path)
 
