@@ -188,13 +188,14 @@ def load_checkpoint(
         optimiser.load_state_dict(checkpoint['optimizer_state_dict'])
         epoch = checkpoint['epoch']
         mean_loss = checkpoint['mean_loss']
-        i = checkpoint['i']
+        i = checkpoint.get('i', None)
         # j = checkpoint['j']
+        run_id = checkpoint.get('wandb_run_id', None)
         logging.info(f"Loaded checkpoint '{checkpoint_path}' (epoch {epoch}, mean loss {mean_loss})")
-        return epoch, mean_loss, i#, j
+        return epoch, mean_loss, i, run_id
     else:
         logging.error(f"No checkpoint found at '{checkpoint_path}'")
-        return None, None
+        return None, None, None, None
 
 
 def batches_are_identical(batch1, batch2):
@@ -344,29 +345,6 @@ def main():
     # Enable anomaly detection
     # torch.autograd.set_detect_anomaly(True)
 
-    if args.wandb:
-        wandb.init(project=f"{args.name}", config={
-            "layers": num_layers,
-            "num_hyena_per_layer": num_hyena,
-            "num_attention_per_layer": num_attention,
-            "heads": num_heads,
-            "n_order": n_order,
-            "kernel_size": kernel_size,
-            "batch_size": batch_size,
-            "emb_dim": emb_dim,
-            "max_sequence_length": max_sequence_length,
-            "l1_lambda": l1_lambda,
-            # "epochs_at_interval": epochs_at_interval,
-            "iters_in_epoch": iters_in_epoch,
-            "warm_up_epochs": warm_up_epochs,
-            "min_read_quality": min_read_quality,
-            "corruption_rate": corruption_rate,
-            "proportion_random_replacement": proportion_random,
-            "learning_rate_main": main_lr,
-            "mixing_alpha": mixing_alpha,
-            "optimiser": "LAMB" if not args.adam else "Adam",
-        })
-
     mask_rate = 1.0 - 2 * proportion_random
     nucleotide_embeddings = NucleotideEmbeddingLayer(
         emb_dim // 2, mlm_mode=True
@@ -429,7 +407,7 @@ def main():
     best_mean_loss = float('inf')
 
     if args.load_latest_checkpoint:
-        epoch, best_mean_loss, i = load_checkpoint(
+        epoch, best_mean_loss, i, run_id = load_checkpoint(
             args.model_dir, args.name, readformer, classifier,
             nucleotide_embeddings,
             metric_embeddings,
@@ -439,6 +417,57 @@ def main():
             logging.info("No checkpoint found. Training from scratch.")
             # Raise an error
             raise FileNotFoundError("No checkpoint found.")
+        else:
+            if run_id is None:
+                if (emb_dim == 256 and num_heads == 16 and num_layers == 3 and
+                        num_hyena == 6 and num_attention == 2):
+                    run_id = "27a83d0p"
+                elif (emb_dim == 512 and num_heads == 32 and num_layers == 4 and
+                        num_hyena == 5 and num_attention == 1):
+                    run_id = "nzdbe8fs"
+                elif (emb_dim == 256 and num_heads == 16 and num_layers == 1 and
+                        num_hyena == 0 and num_attention == 24):
+                    run_id = "mlz3orlu"
+                else:
+                    logging.error(
+                        "Run ID is not specified for these parameters.")
+                    raise ValueError(
+                        "Run ID not found for the current model configuration.")
+
+            i = epoch * iters_in_epoch
+    else:
+        logging.info("Training from scratch.")
+        run_id = None
+
+    if args.wandb:
+        wandb.init(
+            project=f"{args.name}",
+            config={
+                "layers": num_layers,
+                "num_hyena_per_layer": num_hyena,
+                "num_attention_per_layer": num_attention,
+                "heads": num_heads,
+                "n_order": n_order,
+                "kernel_size": kernel_size,
+                "batch_size": batch_size,
+                "emb_dim": emb_dim,
+                "max_sequence_length": max_sequence_length,
+                "l1_lambda": l1_lambda,
+                # "epochs_at_interval": epochs_at_interval,
+                "iters_in_epoch": iters_in_epoch,
+                "warm_up_epochs": warm_up_epochs,
+                "min_read_quality": min_read_quality,
+                "corruption_rate": corruption_rate,
+                "proportion_random_replacement": proportion_random,
+                "learning_rate_main": main_lr,
+                "mixing_alpha": mixing_alpha,
+                "optimiser": "LAMB" if not args.adam else "Adam",
+            },
+            resume='allow',
+            id=run_id
+        )
+        if run_id is None:
+            run_id = wandb.run.id
 
     # logging.info(f"Number of intervals: {len(intervals)}")
 
@@ -862,7 +891,8 @@ def main():
                     "val_perplexity": val_perplexity,
                     "val_metric_loss": val_metric_loss.item(),
                     # "interval": intervals[j]
-                }
+                },
+                step=i
             )
             if profile_batch:
                 wandb.log({"profile_data": wandb.Html(profile_data)})
@@ -899,7 +929,8 @@ def main():
                     #     binary_metric_embeddings.state_dict(),
                     'optimiser_state_dict': optimiser.state_dict(),
                     'mean_loss': mean_loss,
-                    # 'i': i,
+                    'wandb_run_id': run_id,
+                    'i': i,
                     # 'j': j
                 }, checkpoint_path)
                 if args.wandb:
