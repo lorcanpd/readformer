@@ -437,7 +437,8 @@ def main():
         )
         if epoch is None:
             logging.info("No checkpoint found. Training from scratch.")
-            epoch = 0
+            # Raise an error
+            raise FileNotFoundError("No checkpoint found.")
 
     # logging.info(f"Number of intervals: {len(intervals)}")
 
