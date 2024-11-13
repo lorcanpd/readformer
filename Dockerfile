@@ -16,7 +16,8 @@ RUN python3 -m venv $VENV_PATH && \
     . ${VENV_PATH}/bin/activate && \
     pip install --upgrade pip wheel setuptools && \
     pip install torch==2.3.0+cu121 torchvision==0.18.0+cu121 torchaudio==2.3.0+cu121 -f https://download.pytorch.org/whl/torch_stable.html && \
-    pip install pysam==0.22.0 matplotlib==3.8.4 wandb==0.17.2 seaborn==0.13.2 pandas==2.2.1 ipython
+    pip install pysam==0.22.0 matplotlib==3.8.4 wandb==0.17.2 seaborn==0.13.2 pandas==2.2.1 ipython && \
+    pip install SigProfilerAssignment
 
 # Create directories for the user to mount data and code
 RUN mkdir -p /nfs /nst_dir /data/pretrain/BAM /data/finetune/BAM /data/finetune/VCF /scripts/readformer \

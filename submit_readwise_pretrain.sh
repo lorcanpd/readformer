@@ -69,11 +69,18 @@ MAIN_LR=0.0025
 
 NAME="final_pretrain"
 
-EMB_DIMS=( 256 512 256 512 )
-HEAD_NUMS=( 16  32  16  32 )
-LAYER_NUMS=( 3   4   1   1 )
-NUM_HYENAS=( 6   5   0  24 )
-NUM_ATTENS=( 2   1  24   0 )
+#EMB_DIMS=( 256 512 256 ) #512 )
+#HEAD_NUMS=( 16  32  16 ) # 32 )
+#LAYER_NUMS=( 3   4   1 ) #  1 )
+#NUM_HYENAS=( 6   5   0 ) # 24 )
+#NUM_ATTENS=( 2   1  24 ) #  0 )
+
+
+EMB_DIMS=( 512 256 ) #512 )
+HEAD_NUMS=( 32  16 ) # 32 )
+LAYER_NUMS=( 4   1 ) #  1 )
+NUM_HYENAS=( 5   0 ) # 24 )
+NUM_ATTENS=( 1  24 ) #  0 )
 
 
 for i in "${!EMB_DIMS[@]}"; do
@@ -138,7 +145,8 @@ singularity exec --nv \
     --mixing_alpha ${MIXING_ALPHA} \
     --validation_dir /nst_dir \
     --adam \
-    --wandb
+    --wandb \
+    --load_latest_checkpoint True
 
 EOF
     )

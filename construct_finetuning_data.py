@@ -61,6 +61,7 @@ def split_vcf_into_chunks(vcf_file, temp_dir, num_chunks=10):
 
     return chunk_files
 
+
 def write_chunk(vcf_name, records, header, chunk_count, temp_dir):
     """
     Write a chunk of records to a temporary VCF file.

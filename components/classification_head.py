@@ -252,8 +252,7 @@ class MLMClassifier(Module):
 class BetaDistributionClassifier(nn.Module):
     """
     A classification layer that learns the alpha and beta parameters of
-    a Beta distribution, representing aleatoric uncertainty, and captures
-    epistemic uncertainty using Monte Carlo Dropout.
+    a Beta distribution.
     """
     def __init__(self, input_dim, hidden_dim, dropout_rate=0.1):
         super(BetaDistributionClassifier, self).__init__()

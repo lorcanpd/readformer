@@ -418,7 +418,7 @@ def main():
             optimiser
         )
         if epoch is None:
-            logging.info("No checkpoint found. Training from scratch.")
+            logging.info("No checkpoint found.")
             # Raise an error
             raise FileNotFoundError("No checkpoint found.")
         else:
@@ -439,8 +439,12 @@ def main():
             #     raise ValueError(
             #         "Run ID not found for the current model configuration.")
 
-            last_step = i
-            i = i + 1
+            if i is not None:
+                last_step = i
+                i = i + 1
+            else:
+                i = (epoch + 1) * iters_in_epoch + 1
+                last_step = i - 1
     else:
         logging.info("Training from scratch.")
         run_id = None
