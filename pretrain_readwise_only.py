@@ -2,22 +2,23 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.optim import AdamW
-import numpy as np
-# import torch.nn as nn
 from torch.optim.lr_scheduler import OneCycleLR
 from components.data_streaming import create_data_loader
 from components.base_model import Model, init_weights
 from components.read_embedding import (
-    NucleotideEmbeddingLayer, MetricEmbedding)
+    NucleotideEmbeddingLayer,
+    CigarEmbeddingLayer,
+    BaseQualityEmbeddingLayer,
+    SequencingDirectionEmbeddingLayer,
+    ReadReversalEmbeddingLayer
+)
 from components.classification_head import MLMClassifier
 from components.pretrain_utils import (
     apply_masking_with_consistent_replacements,
-    get_random_alternative_labels,
     load_validation_tensors
 )
 from components.lamb import LAMB
 from components.metrics import MLMLoss, mlm_accuracy, calculate_perplexity
-from components.consistency_loss import calculate_consistency_loss
 
 import wandb
 import argparse
@@ -89,7 +90,7 @@ def get_args():
                         help='Minimum read quality.')
     parser.add_argument('--batch_size', type=int, default=256,
                         help='Batch size.')
-    parser.add_argument('--emb_dim', type=int, default=1024,
+    parser.add_argument('--emb_dim', type=int, default=256,
                         help='Embedding dimension.')
     parser.add_argument('--max_sequence_length', type=int,
                         default=1024,
@@ -175,9 +176,13 @@ def get_args():
 def load_checkpoint(
         # model_dir, model_name,
         checkpoint_path,
-        model, classifier, nucleotide_embeddings,
+        model, classifier, base_quality_classifier,
+        nucleotide_embeddings,
+        cigar_embeddings, base_quality_embeddings,
+        sequencing_direction_embeddings, read_reversal_embeddings,
+        gate_projection, feature_projection,
         # float_metric_embeddings, binary_metric_embeddings,
-        metric_embeddings,
+        # metric_embeddings,
         optimiser
 ):
     # checkpoint_path = os.path.join(model_dir, model_name)
@@ -186,8 +191,15 @@ def load_checkpoint(
         checkpoint = torch.load(checkpoint_path)
         model.load_state_dict(checkpoint['model_state_dict'])
         classifier.load_state_dict(checkpoint['classifier_state_dict'])
+        base_quality_classifier.load_state_dict(checkpoint['base_quality_classifier_state_dict'])
         nucleotide_embeddings.load_state_dict(checkpoint['nucleotide_embeddings_state_dict'])
-        metric_embeddings.load_state_dict(checkpoint['metric_embeddings_state_dict'])
+        # metric_embeddings.load_state_dict(checkpoint['metric_embeddings_state_dict'])
+        cigar_embeddings.load_state_dict(checkpoint['cigar_embeddings_state_dict'])
+        base_quality_embeddings.load_state_dict(checkpoint['base_quality_embeddings_state_dict'])
+        sequencing_direction_embeddings.load_state_dict(checkpoint['sequencing_direction_embeddings_state_dict'])
+        read_reversal_embeddings.load_state_dict(checkpoint['read_reversal_embeddings_state_dict'])
+        gate_projection.load_state_dict(checkpoint['gate_projection_state_dict'])
+        feature_projection.load_state_dict(checkpoint['feature_projection_state_dict'])
         optimiser.load_state_dict(checkpoint['optimiser_state_dict'])
         epoch = checkpoint['epoch']
         mean_loss = checkpoint['mean_loss']
@@ -350,13 +362,26 @@ def main():
 
     mask_rate = 1.0 - 2 * proportion_random
     nucleotide_embeddings = NucleotideEmbeddingLayer(
-        emb_dim // 2, mlm_mode=True
+        emb_dim, mlm_mode=True
     ).apply(init_weights).to(device)
     mask_token_index = nucleotide_embeddings.mask_index
-    metric_embeddings = MetricEmbedding(
-        emb_dim // 2,
-        name='metric', num_metrics=16
+
+    cigar_embeddings = CigarEmbeddingLayer(
+        emb_dim // 4
     ).apply(init_weights).to(device)
+    base_quality_embeddings = BaseQualityEmbeddingLayer(
+        emb_dim // 4
+    ).apply(init_weights).to(device)
+    sequencing_direction_embeddings = SequencingDirectionEmbeddingLayer(
+        emb_dim // 4
+    ).apply(init_weights).to(device)
+    read_reversal_embeddings = ReadReversalEmbeddingLayer(
+        emb_dim // 4
+    ).apply(init_weights).to(device)
+
+    gate_projection = nn.Linear(emb_dim, emb_dim).to(device).train()
+    feature_projection = nn.Linear(emb_dim, emb_dim).to(device).train()
+
     readformer = Model(
         emb_dim=emb_dim, heads=num_heads, num_layers=num_layers,
         n_order=n_order,
@@ -370,14 +395,21 @@ def main():
         emb_dim=emb_dim, num_classes=nucleotide_embeddings.padding_idx
     ).apply(init_weights).to(device).train()
 
-    metric_classifier = nn.Linear(emb_dim, 14).to(device).train()
+    base_quality_classifier = nn.Linear(emb_dim, 45).to(device).train()
 
     params = (
             list(nucleotide_embeddings.parameters()) +
-            list(metric_embeddings.parameters()) +
+            # list(metric_embeddings.parameters()) +
+            list(cigar_embeddings.parameters()) +
+            list(base_quality_embeddings.parameters()) +
+            list(sequencing_direction_embeddings.parameters()) +
+            list(read_reversal_embeddings.parameters()) +
+            list(gate_projection.parameters()) +
+            list(feature_projection.parameters()) +
             list(readformer.parameters()) +
             list(classifier.parameters()) +
-            list(metric_classifier.parameters())
+            list(base_quality_classifier.parameters())
+            # list(metric_classifier.parameters())
     )
     # optimiser = torch.optim.Adam(
     #     params, lr=main_lr,
@@ -393,16 +425,11 @@ def main():
             params, lr=main_lr, eps=1e-9, weight_decay=0.05
         )
 
-
     loss_fn = MLMLoss()
-    metric_loss_fn = nn.BCEWithLogitsLoss(reduction='sum')
-
-    # Get nucleotide intervals up to the nucleotide threshold
-    # intervals = create_intervals(max_sequence_length, 256)
+    metric_loss_fn = MLMLoss()
 
     i = 0
     last_step = i
-    # j = 0
     epoch = 0
     epoch_losses = []
     best_mean_loss = float('inf')
@@ -413,8 +440,12 @@ def main():
             # args.model_dir, name,
             checkpoint_path,
             readformer, classifier,
+            base_quality_classifier,
             nucleotide_embeddings,
-            metric_embeddings,
+            # metric_embeddings,
+            cigar_embeddings, base_quality_embeddings,
+            sequencing_direction_embeddings, read_reversal_embeddings,
+            gate_projection, feature_projection,
             optimiser
         )
         if epoch is None:
@@ -422,23 +453,6 @@ def main():
             # Raise an error
             raise FileNotFoundError("No checkpoint found.")
         else:
-            # pass
-            # if run_id is None:
-            # if (emb_dim == 256 and num_heads == 16 and num_layers == 3 and
-            #         num_hyena == 6 and num_attention == 2):
-            #     run_id = "27a83d0p"
-            # elif (emb_dim == 512 and num_heads == 32 and num_layers == 4 and
-            #         num_hyena == 5 and num_attention == 1):
-            #     run_id = "nzdbe8fs"
-            # elif (emb_dim == 256 and num_heads == 16 and num_layers == 1 and
-            #         num_hyena == 0 and num_attention == 24):
-            #     run_id = "mlz3orlu"
-            # else:
-            #     logging.error(
-            #         "Run ID is not specified for these parameters.")
-            #     raise ValueError(
-            #         "Run ID not found for the current model configuration.")
-
             if i is not None:
                 last_step = i
                 i = i + 1
@@ -463,7 +477,6 @@ def main():
                 "emb_dim": emb_dim,
                 "max_sequence_length": max_sequence_length,
                 "l1_lambda": l1_lambda,
-                # "epochs_at_interval": epochs_at_interval,
                 "iters_in_epoch": iters_in_epoch,
                 "warm_up_epochs": warm_up_epochs,
                 "min_read_quality": min_read_quality,
@@ -489,10 +502,7 @@ def main():
             pct_start=0.3, anneal_strategy='cos', cycle_momentum=False
         )
 
-    # logging.info(f"Number of intervals: {len(intervals)}")
-
     contrastive_denominator = 1
-    # logging.info(f"Training for interval {interval}")
     data_loader = create_data_loader(
         file_paths=data_dir,
         metadata_path=metadata_path,
@@ -507,66 +517,63 @@ def main():
     )
     logging.info(f"Data loader created")
 
-    # Set aside one batch for validation before the training loop starts
-    # validation_batch = next(iter(data_loader))
     validation_batch = load_validation_tensors(args.validation_dir)
 
-    # Move the loaded validation tensors to the appropriate device (GPU/CPU)
+    validation_valid_mask = validation_batch['valid_positions'].to(device)
     validation_positions = validation_batch['positions'].to(device)
-    validation_valid_mask = validation_positions != -1
-    val_masked_sequences = validation_batch['masked_sequences'].to(device)
-    val_masked_indices = validation_batch['masked_indices'].to(device)
-    val_replaced_indices = validation_batch['replaced_indices'].to(device)
-    val_kept_indices = validation_batch['kept_indices'].to(device)
-    validation_metrics = validation_batch['metrics'].to(device)
-    validation_nucleotide_sequences = validation_batch[
-        'nucleotide_sequences'].to(device)
+    validation_masked_sequences = validation_batch['masked_sequences'].to(device)
+    validation_replaced_indices = validation_batch['replaced_indices'].to(device)
+    validation_masked_cigar_encodings = validation_batch['masked_cigar_encodings'].to(device)
+    validation_masked_base_qualities = validation_batch['masked_base_qualities'].to(device)
+    validation_masked_sequenced_from = validation_batch['masked_sequenced_from'].to(device)
+    validation_masked_read_reversed = validation_batch['masked_read_reversed'].to(device)
+    validation_masked_sequences = validation_batch['masked_sequences'].to(device)
+    validation_masked_indices = validation_batch['masked_indices'].to(device)
+    # ground truth
+    validation_nucleotide_sequences = validation_batch['nucleotide_sequences'].to(device)
+    validation_base_qualities = validation_batch['base_qualities'].to(device)
     del validation_batch
-    # (
-    #     val_masked_sequences, val_masked_indices, val_replaced_indices,
-    #     val_kept_indices
-    # ) = apply_masking_with_consistent_replacements(
-    #     validation_positions, validation_nucleotide_sequences,
-    #     mask_token_index, rate=corruption_rate, mask_rate=mask_rate,
-    #     keep_rate=proportion_random, replace_rate=proportion_random,
-    #     kernel_size=kernel_size * 3, split=0.5
-    # )
 
-    val_masked_metrics = validation_metrics.clone().to(device)[
-        val_masked_indices & validation_valid_mask][:, 2:]
+    num_unchanged = (
+            validation_valid_mask & ~validation_masked_indices &
+            ~validation_replaced_indices
+    ).sum().item()
+    num_replaced = (
+            validation_valid_mask & validation_replaced_indices
+    ).sum().item()
+    num_masked = (
+            validation_valid_mask & validation_masked_indices
+    ).sum().item()
+
+    # Calculate the total number of tokens
+    total_tokens = num_unchanged + num_replaced + num_masked
+    val_unchanged_scale_factor = total_tokens / num_unchanged if num_unchanged > 0 else 0
+    val_replaced_scale_factor = total_tokens / num_replaced if num_replaced > 0 else 0
+    val_masked_scale_factor = total_tokens / num_masked if num_masked > 0 else 0
 
     # Iterate through data
     for batch in data_loader:
 
-        logging.debug(f"Processing batch {i}")# of data loader {j}")
+        logging.debug(f"Processing batch {i}")
 
-        # with device_context(device):
-        nucleotide_sequences = batch['nucleotide_sequences']#.to(device)
+        nucleotide_sequences = batch['nucleotide_sequences']
         valid_mask = (
                 nucleotide_sequences !=
                 nucleotide_embeddings.padding_idx
         )
-        base_qualities = batch['base_qualities']#.to(device)
-        read_qualities = batch['read_qualities']#.to(device)
-        cigar_match = batch['cigar_match']#.to(device)
-        cigar_insertion = batch['cigar_insertion']#.to(device)
-        bitwise_flags = batch['bitwise_flags']#.to(device)
-        positions = batch['positions']#.to(device)
-
-        metrics = torch.cat(
-            [
-                base_qualities.unsqueeze(-1),
-                read_qualities.unsqueeze(-1),
-                cigar_match.unsqueeze(-1),
-                cigar_insertion.unsqueeze(-1),
-                bitwise_flags
-            ],
-            dim=-1
-        )
-
+        base_qualities = batch['base_qualities']
+        cigar_encodings = batch['cigar_encoding']
+        positions = batch['positions']
+        sequenced_from = batch['sequenced_from']
+        read_reversed = batch['reversed']
+        
         positions = positions.to(device)
         valid_mask = valid_mask.to(device)
         nucleotide_sequences = nucleotide_sequences.to(device)
+        base_qualities = base_qualities.to(device)
+        cigar_encodings = cigar_encodings.to(device)
+        sequenced_from = sequenced_from.to(device)
+        read_reversed = read_reversed.to(device)
 
         # Duplicate the samples to create a batch of size batch_size
         nucleotide_sequences = torch.cat(
@@ -581,67 +588,75 @@ def main():
             [positions for _ in range(contrastive_denominator)],
             dim=0
         )
-        metrics = torch.cat(
-            [metrics for _ in range(contrastive_denominator)],
+        base_qualities = torch.cat(
+            [base_qualities for _ in range(contrastive_denominator)],
+            dim=0
+        )
+        cigar_encodings = torch.cat(
+            [cigar_encodings for _ in range(contrastive_denominator)],
+            dim=0
+        )
+        sequenced_from = torch.cat(
+            [sequenced_from for _ in range(contrastive_denominator)],
+            dim=0
+        )
+        read_reversed = torch.cat(
+            [read_reversed for _ in range(contrastive_denominator)],
             dim=0
         )
 
+
         with ((device_context(device))):
             (
-                masked_sequences, masked_indices, replaced_indices,
-                kept_indices  # Selected for corruption but not altered.
+                masked_sequences, masked_indices, replaced_indices
             ) = apply_masking_with_consistent_replacements(
-                positions, nucleotide_sequences, mask_token_index,
+                nucleotide_sequences, mask_token_index,
                 rate=corruption_rate, mask_rate=mask_rate,
-                keep_rate=proportion_random, replace_rate=proportion_random,
+                replace_rate=proportion_random,
                 kernel_size=kernel_size, split=0.5
             )
-            # Extract categorical metrics for the masked positions.
-            masked_metrics = metrics.clone().to(
-                device
-            )[masked_indices & valid_mask][:, 2:]
-            alt_labels = get_random_alternative_labels(
-                masked_sequences[
-                    replaced_indices | kept_indices
-                ]
+
+            num_replaced = replaced_indices.sum().item()
+
+            masked_cigar_encodings = cigar_encodings.clone().to(device)
+            masked_cigar_encodings[masked_indices] = -1
+            # replace the masked indices with num_replaced random indices
+            masked_cigar_encodings[replaced_indices] = torch.randint(
+                0, 4, (num_replaced,), dtype=torch.int32, device=device
             )
-            lambdas = torch.from_numpy(
-                np.random.beta(
-                    mixing_alpha, mixing_alpha, size=alt_labels.size(-1)
-                )
-            ).to(device=device, dtype=torch.float32).detach()
-            # Label mixing to be carried out on the indices contained in
-            # replaced_indices, masked_indices and kept_indices.
+            masked_base_qualities = base_qualities.clone().to(device)
+            masked_base_qualities[masked_indices] = -1
+            masked_base_qualities[replaced_indices] = torch.randint(
+                0, 45, (num_replaced,), dtype=torch.int32, device=device
+            )
+            masked_sequenced_from = sequenced_from.clone().to(device)
+            masked_sequenced_from[masked_indices] = -1
+            masked_read_reversed = read_reversed.clone().to(device)
+            masked_read_reversed[masked_indices] = -1
+
             masked_nucleotide_emb = nucleotide_embeddings(masked_sequences)
-            # Apply the label mixing to the masked nucleotide embeddings.
-            mixed_embeddings = lambdas.unsqueeze(-1) * masked_nucleotide_emb[
-                    replaced_indices | kept_indices] + (
-                    1 - lambdas.unsqueeze(-1)) * nucleotide_embeddings(
-                alt_labels
-            )
-            masked_nucleotide_emb[
-                replaced_indices | kept_indices
-            ] = mixed_embeddings
-            # Expand lambdas over the whole input tensor for calculating the loss.
-            # expanded_lambdas = torch.zeros_like(
-            #     positions, dtype=torch.float32
-            # )
-            # expanded_lambdas[
-            #     masked_indices | replaced_indices | kept_indices
-            # ] = lambdas
-            # expanded_lambdas[replaced_indices | kept_indices] = 0.0
-            metric_emb = metric_embeddings(metrics.to(device))
-            metric_emb = metric_emb * (~masked_indices).unsqueeze(-1).float()
-            # metric_emb = metric_emb * (
-            #         1 - expanded_lambdas.unsqueeze(-1) *
-            #         masked_indices.unsqueeze(-1).float()
-            # )
-            model_input = torch.cat(
+
+            # Concatenate the metrics embeddings.
+            metric_emb = torch.cat(
                 [
-                    masked_nucleotide_emb,
-                    metric_emb
-                ], dim=-1
-            ).to(device)
+                    cigar_embeddings(masked_cigar_encodings),
+                    base_quality_embeddings(masked_base_qualities),
+                    sequencing_direction_embeddings(masked_sequenced_from),
+                    read_reversal_embeddings(masked_read_reversed)
+                ],
+                dim=-1
+            )
+
+            # Gate the nucleotide embeddings using the metrics embeddings a la
+            # SwiGLU.
+            gate = torch.sigmoid(
+                gate_projection(metric_emb))
+            swish_output = F.silu(
+                feature_projection(masked_nucleotide_emb))
+            # Apply the gating mechanism to the nucleotide embeddings with dropout.
+            model_input = F.dropout(
+                gate * swish_output, p=0.1, training=True
+            ).to(device) + masked_nucleotide_emb
 
             # Get the output from the model
             # Profile every 10th batch
@@ -650,12 +665,9 @@ def main():
                     profile_batch, use_cuda=torch.cuda.is_available()
             ) as prof:
                 output = readformer(model_input, positions)
-                metric_output = metric_classifier(
-                    output[masked_indices & valid_mask]
+                base_quality_output = base_quality_classifier(
+                    output
                 )
-                # consistency_loss = calculate_consistency_loss(
-                #     output, contrastive_denominator
-                # )
                 output = classifier(output)
                 batch_accuracy = mlm_accuracy(
                     output[valid_mask], nucleotide_sequences[valid_mask]
@@ -666,17 +678,12 @@ def main():
                 replaced_accuracy = mlm_accuracy(
                     output[replaced_indices], nucleotide_sequences[replaced_indices]
                 )
-                kept_accuracy = mlm_accuracy(
-                    output[kept_indices], nucleotide_sequences[kept_indices]
-                )
                 not_corrupted_accuracy = mlm_accuracy(
                     output[
-                        valid_mask & ~masked_indices & ~replaced_indices &
-                        ~kept_indices
+                        valid_mask & ~masked_indices & ~replaced_indices
                     ],
                     nucleotide_sequences[
-                        valid_mask & ~masked_indices & ~replaced_indices &
-                        ~kept_indices
+                        valid_mask & ~masked_indices & ~replaced_indices
                     ]
                 )
                 # Main model loss and optimisation
@@ -684,16 +691,15 @@ def main():
                 num_unchanged = (valid_mask & ~masked_indices & ~replaced_indices).sum().item()
                 num_replaced = (valid_mask & replaced_indices).sum().item()
                 num_masked = (valid_mask & masked_indices).sum().item()
-                num_kept = (valid_mask & kept_indices).sum().item()
 
                 # Calculate the total number of tokens
-                total_tokens = num_unchanged + num_replaced + num_masked + num_kept
+                total_tokens = num_unchanged + num_replaced + num_masked
 
                 # Automatically calculate scale factors based on the proportion of each category
                 unchanged_scale_factor = total_tokens / num_unchanged if num_unchanged > 0 else 0
                 replaced_scale_factor = total_tokens / num_replaced if num_replaced > 0 else 0
                 masked_scale_factor = total_tokens / num_masked if num_masked > 0 else 0
-                kept_scale_factor = total_tokens / num_kept if num_kept > 0 else 0
+
                 unchanged_loss = loss_fn(
                     output[
                         valid_mask & ~masked_indices & ~replaced_indices
@@ -710,25 +716,45 @@ def main():
                     scale_factor=replaced_scale_factor,
                     # entropy_reg=True
                 )
-                kept_loss = loss_fn(
-                    output[valid_mask & kept_indices],
-                    nucleotide_sequences[valid_mask & kept_indices],
-                    scale_factor=kept_scale_factor,
-                    # entropy_reg=True
-                )
                 masked_loss = loss_fn(
                     output[valid_mask & masked_indices],
                     nucleotide_sequences[valid_mask & masked_indices],
                     scale_factor=2*masked_scale_factor,
                     # entropy_reg=True
                 )
+                unchanged_base_quality_loss = metric_loss_fn(
+                    base_quality_output[
+                        valid_mask & ~masked_indices & ~replaced_indices],
+                    base_qualities[
+                        valid_mask & ~masked_indices & ~replaced_indices],
+                    scale_factor=unchanged_scale_factor
+                )
+                masked_base_quality_loss = metric_loss_fn(
+                    base_quality_output[valid_mask & masked_indices],
+                    base_qualities[valid_mask & masked_indices],
+                    scale_factor=2*masked_scale_factor
+                )
+                replaced_base_quality_loss = metric_loss_fn(
+                    base_quality_output[valid_mask & replaced_indices],
+                    base_qualities[valid_mask & replaced_indices],
+                    scale_factor=replaced_scale_factor
+                )
 
-                metric_loss = metric_loss_fn(metric_output, masked_metrics)
-
-                loss = unchanged_loss + replaced_loss + masked_loss + kept_loss + metric_loss
+                base_quality_loss = (
+                    unchanged_base_quality_loss + masked_base_quality_loss +
+                    replaced_base_quality_loss
+                )
+                loss = (
+                    unchanged_loss + replaced_loss + masked_loss +
+                    base_quality_loss
+                )
                 train_perplexity = calculate_perplexity(
                     output[masked_indices & valid_mask],
                     nucleotide_sequences[masked_indices & valid_mask]
+                )
+                train_base_quality_perplexity = calculate_perplexity(
+                    base_quality_output[valid_mask & masked_indices],
+                    base_qualities[valid_mask & masked_indices]
                 )
                 # loss = replaced_loss + masked_loss
                 optimiser.zero_grad()
@@ -738,9 +764,6 @@ def main():
                         and args.logging.upper() == 'DEBUG'):
                     torch.cuda.synchronize()
 
-                # torch.nn.utils.clip_grad_norm_(
-                #     params, max_norm=1
-                # )
                 optimiser.step()
                 try:
                     scheduler.step()
@@ -754,108 +777,154 @@ def main():
                         and args.logging.upper() == 'DEBUG'):
                     torch.cuda.synchronize()
 
+            gate_projection.eval()
+            feature_projection.eval()
             readformer.eval()
             classifier.eval()
-            metric_classifier.eval()
+            base_quality_classifier.eval()
             # Validation forward pass.
             with torch.no_grad():
 
-                val_masked_nucleotide_emb = nucleotide_embeddings(val_masked_sequences)
-                val_metric_emb = metric_embeddings(validation_metrics)
-                val_model_input = torch.cat([val_masked_nucleotide_emb, val_metric_emb], dim=-1).to(device)
+                val_masked_nucleotide_emb = nucleotide_embeddings(
+                    validation_masked_sequences)
+                val_metric_emb = torch.cat(
+                    [
+                        cigar_embeddings(validation_masked_cigar_encodings),
+                        base_quality_embeddings(validation_masked_base_qualities),
+                        sequencing_direction_embeddings(validation_masked_sequenced_from),
+                        read_reversal_embeddings(validation_masked_read_reversed)
+                    ],
+                    dim=-1
+                )
+
+                # SwiGLU gating.
+                val_gate = torch.sigmoid(
+                    gate_projection(val_metric_emb))
+                val_swish_output = F.silu(
+                    feature_projection(val_masked_nucleotide_emb))
+                val_model_input = val_gate * val_swish_output + val_masked_nucleotide_emb
 
                 # Forward pass
                 val_output = readformer(val_model_input, validation_positions)
-                val_metric_output = metric_classifier(
-                    val_output[validation_valid_mask & val_masked_indices]
+
+                val_pred_nucleotide = classifier(val_output)
+                val_pred_base_quality = base_quality_classifier(
+                    val_output
                 )
-                val_output = classifier(val_output)
 
-
-                num_unchanged = (
-                        validation_valid_mask & ~val_masked_indices &
-                        ~val_replaced_indices
-                ).sum().item()
-                num_replaced = (validation_valid_mask & val_replaced_indices).sum().item()
-                num_masked = (validation_valid_mask & val_masked_indices).sum().item()
-                num_kept = (validation_valid_mask & val_kept_indices).sum().item()
-
-                # Calculate the total number of tokens
-                total_tokens = num_unchanged + num_replaced + num_masked + num_kept
-                unchanged_scale_factor = total_tokens / num_unchanged if num_unchanged > 0 else 0
-                replaced_scale_factor = total_tokens / num_replaced if num_replaced > 0 else 0
-                masked_scale_factor = total_tokens / num_masked if num_masked > 0 else 0
-                kept_scale_factor = total_tokens / num_kept if num_kept > 0 else 0
 
                 val_unchanged_loss = loss_fn(
-                    val_output[
-                        validation_valid_mask & ~val_masked_indices & ~val_replaced_indices
-                        & ~val_kept_indices
-                        ],
+                    val_pred_nucleotide[
+                        validation_valid_mask & ~validation_masked_indices
+                        & ~validation_replaced_indices
+                    ],
                     validation_nucleotide_sequences[
-                        validation_valid_mask & ~val_masked_indices & ~val_replaced_indices
-                        & ~val_kept_indices
-                        ],
-                    scale_factor=unchanged_scale_factor
+                        validation_valid_mask & ~validation_masked_indices
+                        & ~validation_replaced_indices
+                    ],
+                    scale_factor=val_unchanged_scale_factor
                 )
                 val_replaced_loss = loss_fn(
-                    val_output[validation_valid_mask & val_replaced_indices],
-                    validation_nucleotide_sequences[validation_valid_mask & val_replaced_indices],
-                    scale_factor=replaced_scale_factor
+                    val_pred_nucleotide[
+                        validation_valid_mask & validation_replaced_indices],
+                    validation_nucleotide_sequences[
+                        validation_valid_mask & validation_replaced_indices],
+                    scale_factor=val_replaced_scale_factor
                 )
-                val_kept_loss = loss_fn(
-                    val_output[validation_valid_mask & val_kept_indices],
-                    validation_nucleotide_sequences[ validation_valid_mask & val_kept_indices],
-                    scale_factor=kept_scale_factor
-                )
+
                 val_masked_loss = loss_fn(
-                    val_output[validation_valid_mask & val_masked_indices],
-                    validation_nucleotide_sequences[validation_valid_mask & val_masked_indices],
-                    scale_factor=2*masked_scale_factor
+                    val_pred_nucleotide[
+                        validation_valid_mask & validation_masked_indices],
+                    validation_nucleotide_sequences[
+                        validation_valid_mask & validation_masked_indices],
+                    scale_factor=2*val_masked_scale_factor
                 )
 
                 # Compute validation statistics
                 val_batch_accuracy = mlm_accuracy(
-                    val_output[validation_valid_mask],
+                    val_pred_nucleotide[validation_valid_mask],
                     validation_nucleotide_sequences[validation_valid_mask]
                 )
                 val_masked_accuracy = mlm_accuracy(
-                    val_output[validation_valid_mask & val_masked_indices],
-                    validation_nucleotide_sequences[validation_valid_mask & val_masked_indices]
+                    val_pred_nucleotide[
+                        validation_valid_mask & validation_masked_indices],
+                    validation_nucleotide_sequences[
+                        validation_valid_mask & validation_masked_indices]
                 )
                 val_replaced_accuracy = mlm_accuracy(
-                    val_output[validation_valid_mask & val_replaced_indices],
-                    validation_nucleotide_sequences[validation_valid_mask & val_replaced_indices]
-                )
-                val_kept_accuracy = mlm_accuracy(
-                    val_output[validation_valid_mask & val_kept_indices],
-                    validation_nucleotide_sequences[validation_valid_mask & val_kept_indices]
+                    val_pred_nucleotide[
+                        validation_valid_mask & validation_replaced_indices],
+                    validation_nucleotide_sequences[
+                        validation_valid_mask & validation_replaced_indices]
                 )
                 val_not_corrupted_accuracy = mlm_accuracy(
-                    val_output[
-                        validation_valid_mask & ~val_masked_indices & ~val_replaced_indices &
-                        ~val_kept_indices
-                        ],
+                    val_pred_nucleotide[
+                        validation_valid_mask & ~validation_masked_indices
+                        & ~validation_replaced_indices
+                    ],
                     validation_nucleotide_sequences[
-                        validation_valid_mask & ~val_masked_indices & ~val_replaced_indices &
-                        ~val_kept_indices
-                        ]
+                        validation_valid_mask & ~validation_masked_indices
+                        & ~validation_replaced_indices
+                    ]
                 )
-                val_metric_loss = metric_loss_fn(val_metric_output, val_masked_metrics)
+                # val_metric_loss = metric_loss_fn(validation_metric_output, val_masked_metrics)
+                val_masked_base_quality_loss = metric_loss_fn(
+                    val_pred_base_quality[
+                        validation_valid_mask & validation_masked_indices],
+                    validation_base_qualities[
+                        validation_valid_mask & validation_masked_indices],
+                    scale_factor=2*val_masked_scale_factor
+                )
+                val_replaced_base_quality_loss = metric_loss_fn(
+                    val_pred_base_quality[
+                        validation_valid_mask & validation_replaced_indices],
+                    validation_base_qualities[
+                        validation_valid_mask & validation_replaced_indices],
+                    scale_factor=val_replaced_scale_factor
+                )
+                val_unchanged_base_quality_loss = metric_loss_fn(
+                    val_pred_base_quality[
+                        validation_valid_mask & ~validation_masked_indices
+                        & ~validation_replaced_indices
+                    ],
+                    validation_base_qualities[
+                        validation_valid_mask & ~validation_masked_indices
+                        & ~validation_replaced_indices
+                    ],
+                    scale_factor=val_unchanged_scale_factor
+                )
+                # TODO BASE QUALITY LOSS NEEDS TO BE SPLITTED INTO THE DIFFERENT
+                #  CATEGORIES
                 # Calculate validation loss (similar to the training loss)
-                val_loss = val_replaced_loss + val_masked_loss + \
-                    val_kept_loss + val_unchanged_loss + val_metric_loss
+                val_base_quality_loss = (
+                    val_masked_base_quality_loss +
+                    val_replaced_base_quality_loss +
+                    val_unchanged_base_quality_loss
+                )
+                val_loss = (
+                    val_replaced_loss + val_masked_loss +
+                    val_unchanged_loss + val_base_quality_loss
+                )
 
                 val_perplexity = calculate_perplexity(
-                    val_output[
-                        val_masked_indices & validation_valid_mask],
+                    val_pred_nucleotide[
+                        validation_masked_indices & validation_valid_mask],
                     validation_nucleotide_sequences[
-                        val_masked_indices & validation_valid_mask]
+                        validation_masked_indices & validation_valid_mask]
                 )
 
+                val_base_quality_perplexity = calculate_perplexity(
+                    val_pred_base_quality[
+                        validation_valid_mask & validation_masked_indices],
+                    validation_base_qualities[
+                        validation_valid_mask & validation_masked_indices]
+                )
+
+                gate_projection.train()
+                feature_projection.train()
                 readformer.train()
                 classifier.train()
-                metric_classifier.train()
+                base_quality_classifier.train()
 
         if profile_batch:
             if torch.cuda.is_available():
@@ -881,14 +950,17 @@ def main():
             f"Replaced accuracy: {replaced_accuracy:.5f}, "
             f"val replaced accuracy: {val_replaced_accuracy:.5f}")
         logging.debug(
-            f"Kept accuracy: {kept_accuracy:.5f}, "
-            f"val kept accuracy: {val_kept_accuracy:.5f}")
-        logging.debug(
             f"Not corrupted accuracy: {not_corrupted_accuracy:.5f}, "
             f"val not corrupted accuracy: {val_not_corrupted_accuracy:.5f}")
         logging.debug(
             f"Train perplexity: {train_perplexity:.5f}, "
             f"val perplexity: {val_perplexity:.5f}")
+        logging.debug(
+            f"Base quality loss: {base_quality_loss.item():.5f}, "
+            f"val base quality loss: {val_base_quality_loss.item():.5f}")
+        logging.debug(
+            f"Train base quality perplexity: {train_base_quality_perplexity:.5f}, "
+            f"val base quality perplexity: {val_base_quality_perplexity:.5f}")
 
         if args.wandb:
             wandb.log(
@@ -898,19 +970,18 @@ def main():
                     "lr": scheduler.get_last_lr()[0],
                     "masked_accuracy": masked_accuracy,
                     "replaced_accuracy": replaced_accuracy,
-                    "kept_accuracy": kept_accuracy,
                     "not_corrupted_accuracy": not_corrupted_accuracy,
                     "train_perplexity": train_perplexity,
-                    "metric_loss": metric_loss.item(),
+                    "base_quality_loss": base_quality_loss.item(),
                     "val_loss": val_loss.item(),
                     "val_batch_accuracy": val_batch_accuracy,
                     "val_masked_accuracy": val_masked_accuracy,
                     "val_replaced_accuracy": val_replaced_accuracy,
-                    "val_kept_accuracy": val_kept_accuracy,
                     "val_not_corrupted_accuracy": val_not_corrupted_accuracy,
                     "val_perplexity": val_perplexity,
-                    "val_metric_loss": val_metric_loss.item(),
-                    # "interval": intervals[j]
+                    "val_base_quality_loss": val_base_quality_loss.item(),
+                    "train_base_quality_perplexity": train_base_quality_perplexity,
+                    "val_base_quality_perplexity": val_base_quality_perplexity,
                 },
                 step=i
             )
@@ -938,19 +1009,24 @@ def main():
                     'epoch': epoch,
                     'model_state_dict': readformer.state_dict(),
                     'classifier_state_dict': classifier.state_dict(),
-                    'metric_classifier_state_dict': metric_classifier.state_dict(),
+                    'base_quality_classifier_state_dict':
+                        base_quality_classifier.state_dict(),
                     'nucleotide_embeddings_state_dict':
                         nucleotide_embeddings.state_dict(),
-                    'metric_embeddings_state_dict':
-                        metric_embeddings.state_dict(),
-                    # 'float_metric_embeddings_state_dict':
-                    #     float_metric_embeddings.state_dict(),
-                    # 'binary_metric_embeddings_state_dict':
-                    #     binary_metric_embeddings.state_dict(),
+                    'cigar_embeddings_state_dict': cigar_embeddings.state_dict(),
+                    'base_quality_embeddings_state_dict':
+                        base_quality_embeddings.state_dict(),
+                    'sequencing_direction_embeddings_state_dict':
+                        sequencing_direction_embeddings.state_dict(),
+                    'read_reversal_embeddings_state_dict':
+                        read_reversal_embeddings.state_dict(),
+                    'gate_projection_state_dict':
+                        gate_projection.state_dict(),
+                    'feature_projection_state_dict':
+                        feature_projection.state_dict(),
                     'optimiser_state_dict': optimiser.state_dict(),
                     'mean_loss': mean_loss,
                     'i': i,
-                    # 'j': j
                 }
                 if args.wandb:
                     update['wandb_run_id'] = run_id
@@ -965,10 +1041,6 @@ def main():
 
             epoch += 1
             epoch_losses = []
-
-            # if j < len(intervals) - 1 and epoch % epochs_at_interval == 0 and epoch > 0:
-            #     j += 1
-            #     break
 
         if i >= args.max_iters:
             break

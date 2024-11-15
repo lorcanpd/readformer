@@ -5,7 +5,7 @@ import pandas as pd
 import torch
 from torch.utils.data import Dataset, DataLoader, Sampler, get_worker_info
 from components.extract_reads import (
-    extract_single_read_from_position, sample_positions, get_read_info
+    extract_random_read_from_position, sample_positions, get_read_info
 )
 import multiprocessing as mp
 import logging
@@ -89,11 +89,7 @@ class BAMReadDataset(Dataset):
         while retries < max_retries:
             positions = sample_positions(1, sex)
             try:
-                # read_dict = extract_reads_from_position_onward(
-                #     file_path, 'chr' + positions[0][0], positions[0][1],
-                #     self.nucleotide_threshold, self.min_quality
-                # )
-                read_dict = extract_single_read_from_position(
+                read_dict = extract_random_read_from_position(
                     file_path, 'chr' + positions[0][0], positions[0][1],
                     self.min_quality
                 )
@@ -118,49 +114,89 @@ class BAMReadDataset(Dataset):
 
         nucleotide_sequences = []
         base_qualities = []
-        read_qualities = []
-        cigar_match = []
-        cigar_insertion = []
-        bitwise_flags = []
+        cigar_encoding = []
+        sequenced_from = []  # 0 for 5' to 3', 1 for 3' to 5'
         positions = []
+        is_reversed = []
         total_sequence_length = 0
 
         # Parse read data
         for read in read_info.values():
+            # use orientation flags to ensure 5' is always at the start of the
+            # sequence. Then create an orientation flag for each nucleotide
+            # to represent the direction the read was sequenced from.
+            to_be_reversed = read['orientation_flags'].get('is_reverse', 0)
+            is_first = read['orientation_flags'].get('is_first_in_pair', 0)
+            is_second = read['orientation_flags'].get('is_second_in_pair', 0)
+            if to_be_reversed:
+                need_to_reverse = True
+                # R2 sequenced from 3', R1 from 5'
+                sequenced_from_five_end = 1 if is_second else 0
+            else:
+                need_to_reverse = False
+                # R1 sequenced from 5', R2 from 3'
+                sequenced_from_five_end = 0 if is_first else 1
+
             sequence_length = len(read['query_sequence'])
-            nucleotide_sequences += list(read['query_sequence'])
-            base_qualities += read['base_qualities']
-            read_qualities += [read['mapping_quality']] * sequence_length
-            cigar_match += read['cigar_match_vector']
-            cigar_insertion += read['cigar_insertion_vector']
-            bitwise_flags += replicate_binary_flag_vector_list(
-                read['binary_flag_vector'],
-                sequence_length
-            )
-            positions += read['positions']
+            if need_to_reverse:
+                nucleotide_sequences += list(read['query_sequence'][::-1])
+                base_qualities += list(read['base_qualities'][::-1])
+                cigar_encoding += read['cigar_encoding'][::-1]
+                sequenced_from += [sequenced_from_five_end] * sequence_length
+                positions += read['positions'][::-1]
+                is_reversed += [1] * sequence_length
+            else:
+                nucleotide_sequences += list(read['query_sequence'])
+                base_qualities += read['base_qualities']
+                cigar_encoding += read['cigar_encoding']
+                sequenced_from += [sequenced_from_five_end] * sequence_length
+                positions += read['positions']
+                is_reversed += [0] * sequence_length
+
+            # Clip reads over the threshold, so that the total sequence length
+            # does not exceed the threshold. Reads must be clipped so that
+            # the sequence includes the end sequencing began from.
+            if sequence_length > self.nucleotide_threshold:
+                # Here 0 is 5' to 3' and 1 is 3' to 5'
+                if sequenced_from_five_end == 0:
+                    nucleotide_sequences = nucleotide_sequences[:self.nucleotide_threshold]
+                    base_qualities = base_qualities[:self.nucleotide_threshold]
+                    cigar_encoding = cigar_encoding[:self.nucleotide_threshold]
+                    sequenced_from = sequenced_from[:self.nucleotide_threshold]
+                    positions = positions[:self.nucleotide_threshold]
+                    is_reversed = is_reversed[:self.nucleotide_threshold]
+                else:
+                    nucleotide_sequences = nucleotide_sequences[-self.nucleotide_threshold:]
+                    base_qualities = base_qualities[-self.nucleotide_threshold:]
+                    cigar_encoding = cigar_encoding[-self.nucleotide_threshold:]
+                    sequenced_from = sequenced_from[-self.nucleotide_threshold:]
+                    positions = positions[-self.nucleotide_threshold:]
+                    is_reversed = is_reversed[-self.nucleotide_threshold:]
+
+                sequence_length = len(nucleotide_sequences)
+
             total_sequence_length += sequence_length
 
         # Pad sequences to the threshold length
         padding_length = self.max_sequence_length - total_sequence_length
         nucleotide_sequences += [''] * padding_length
-        base_qualities += [0.0] * padding_length
-        read_qualities += [0.0] * padding_length
-        cigar_match += [0.0] * padding_length
-        cigar_insertion += [0.0] * padding_length
-        bitwise_flags += [[0.0] * 12] * padding_length
+        base_qualities += [-1] * padding_length
+        cigar_encoding += [-1] * padding_length
+        sequenced_from += [-1] * padding_length
         positions += [-1] * padding_length
+        is_reversed += [-1] * padding_length
 
         logging.debug(
             f"Returning batch, number of nucleotide sequences: {len(nucleotide_sequences)}"
         )
+
         return {
             'nucleotide_sequences': nucleotide_sequences,
             'base_qualities': base_qualities,
-            'read_qualities': read_qualities,
-            'cigar_match': cigar_match,
-            'cigar_insertion': cigar_insertion,
-            'bitwise_flags': bitwise_flags,
-            'positions': positions
+            'cigar_encoding': cigar_encoding,
+            'sequenced_from': sequenced_from,
+            'positions': positions,
+            'reversed': is_reversed
         }
 
 
@@ -181,37 +217,6 @@ def worker_init_fn(worker_id):
     worker_info = get_worker_info()
     if worker_info is not None:
         logging.info(f"Initialising worker {worker_info.id}/{worker_info.num_workers}")
-
-    #     # This should prevent pytorch from using more than one thread per worker.
-    #     os.environ['OMP_NUM_THREADS'] = '1'
-    #     os.environ['MKL_NUM_THREADS'] = '1'
-    #     os.environ['NUMEXPR_NUM_THREADS'] = '1'
-    #     os.environ['VECLIB_MAXIMUM_THREADS'] = '1'
-    #     os.environ['OPENBLAS_NUM_THREADS'] = '1'
-    #
-    #     # Get the number of allocated CPU cores from LSF
-    #     total_cores = int(os.getenv('LSB_DJOB_NUMPROC', os.cpu_count()))
-    #     core_id = worker_id % total_cores
-    #     # Pin each worker to a specific CPU core if supported
-    #     try:
-    #         if hasattr(os, 'sched_setaffinity'):
-    #             os.sched_setaffinity(0, {core_id})
-    #             logging.info(f"Worker {worker_info.id} is pinned to CPU core {core_id}")
-    #         else:
-    #             logging.warning("CPU affinity setting not supported on this OS.")
-    #     except Exception as e:
-    #         logging.error(f"Error setting CPU affinity: {e}")
-    #
-    #     # Ensure CUDA is initialised in each worker
-    #     try:
-    #         if torch.cuda.is_available():
-    #             device_id = worker_info.id % torch.cuda.device_count()
-    #             torch.cuda.set_device(device_id)
-    #             logging.info(f"Worker {worker_info.id} is using device {device_id}")
-    #     except Exception as e:
-    #         logging.error(f"Error setting CUDA device: {e}")
-    # else:
-    #     logging.info("Initialising main process")
 
 
 def create_data_loader(
@@ -294,45 +299,6 @@ def encode_nucleotides(sequence):
     """
     # Handle case where base is not in the lookup table
     return [nucleotide_to_index.get(nuc, 15) for nuc in sequence]
-
-#
-# def collate_fn(batch):
-#     """
-#     Collate function to process and batch the data samples.
-#
-#     :param batch:
-#         A list of dictionaries where each dictionary represents a data sample.
-#     :returns:
-#         A dictionary of batched tensors, or None if the batch is empty after
-#         filtering.
-#     """
-#     # Filter out None samples
-#     batch = [x for x in batch if x is not None]
-#
-#     # Handle edge case where batch might be empty after filtering
-#     if not batch:
-#         return None
-#
-#     # Creating batch tensors for each key in the dictionary
-#     batched_data = {}
-#
-#     # Iterate over the keys in a sample's dictionary
-#     for key in batch[0]:
-#         if key == 'nucleotide_sequences':
-#             # Encode nucleotide sequences and convert them to tensor
-#             encoded_sequences = [encode_nucleotides(b[key]) for b in batch]
-#             batched_data[key] = torch.tensor(
-#                 encoded_sequences, dtype=torch.int32
-#             )
-#         else:
-#             # Assume other keys are already appropriate for conversion to tensor
-#             batched_data[key] = torch.tensor(
-#                 [b[key] for b in batch],
-#                 dtype=torch.float32 if isinstance(batch[0][key][0], float)
-#                 else torch.int32
-#             )
-#
-#     return batched_data
 
 
 class CustomBatch:

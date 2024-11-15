@@ -1,6 +1,6 @@
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
+# import torch.nn.functional as F
 
 from components.better_device_handling import Module
 
@@ -58,40 +58,6 @@ class NucleotideLookup:
         return nucleotides
 
 
-class MetricEmbedding(Module):
-    def __init__(self, embedding_dim, num_metrics, name=None):
-        """
-        Initialises the metric embedding layer.
-
-        :param embedding_dim:
-            The dimensionality of the embedding space used for the nucleotide
-            representations.
-        :param name:
-            The name of the layer.
-        """
-        super(MetricEmbedding, self).__init__()
-        self.embedding_dim = embedding_dim
-        self.num_metrics = num_metrics
-
-        if name is not None:
-            self.name = name + "_metric_embedding"
-        else:
-            self.name = "metric_embedding"
-
-        self.embedding_matrix = nn.Parameter(
-            nn.init.kaiming_normal_(torch.empty(num_metrics, embedding_dim))
-        )
-
-        self.bias = nn.Parameter(torch.zeros(embedding_dim))
-        # self.activation = nn.ReLU()
-        self.activation = lambda x: x * torch.tanh(F.softplus(x))
-
-    def forward(self, inputs):
-        return self.activation(
-            torch.matmul(inputs, self.embedding_matrix).add(self.bias)
-        )
-
-
 class NucleotideEmbeddingLayer(Module):
     def __init__(self, embedding_dim, mlm_mode=False):
         """
@@ -126,4 +92,115 @@ class NucleotideEmbeddingLayer(Module):
         # Mask the padding indices with zero vectors
         mask = (inputs != self.padding_idx).unsqueeze(-1).float()
         embeddings = embeddings * mask
+        return embeddings
+
+
+class CigarEmbeddingLayer(Module):
+    def __init__(self, embedding_dim):
+        """
+        Initialises the CIGAR embedding layer.
+
+        :param embedding_dim:
+            The dimensionality of the embedding space.
+        """
+        super(CigarEmbeddingLayer, self).__init__()
+        # There are 9 cigar operations, including -1 for padding
+        num_cigar_ops = 5
+        self.embedding = nn.Embedding(
+            num_embeddings=num_cigar_ops,
+            embedding_dim=embedding_dim,
+            padding_idx=-1,
+        )
+
+    def forward(self, inputs):
+        """
+        Maps the input CIGAR operations to their embeddings.
+
+        :param inputs:
+            A batch of sequences as torch tensors with CIGAR operation indices.
+        :return:
+            The corresponding CIGAR operation embeddings.
+        """
+        embeddings = self.embedding(inputs)
+        return embeddings
+
+
+class BaseQualityEmbeddingLayer(Module):
+    """
+    Initialises the base quality embedding layer.
+
+    :param embedding_dim:
+        The dimensionality of the embedding space.
+
+    """
+    def __init__(self, embedding_dim):
+        super(BaseQualityEmbeddingLayer, self).__init__()
+        self.embedding = nn.Embedding(
+            num_embeddings=45,
+            embedding_dim=embedding_dim,
+            padding_idx=-1
+        )
+
+    def forward(self, inputs):
+        embeddings = self.embedding(inputs)
+        return embeddings
+
+
+class SequencingDirectionEmbeddingLayer(Module):
+    def __init__(self, embedding_dim):
+        """
+        Initialises the sequencing direction embedding layer.
+
+        :param embedding_dim:
+            The dimensionality of the embedding space.
+        """
+        super(SequencingDirectionEmbeddingLayer, self).__init__()
+        num_directions = 2
+        self.embedding = nn.Embedding(
+            num_embeddings=num_directions,
+            embedding_dim=embedding_dim,
+            padding_idx=-1
+        )
+
+    def forward(self, inputs):
+        """
+        Maps the input sequencing directions to their embeddings.
+
+        :param inputs:
+            A batch of sequences as torch tensors with sequencing direction indices.
+        :return:
+            The corresponding sequencing direction embeddings.
+        """
+        embeddings = self.embedding(inputs)
+        return embeddings
+
+
+class ReadReversalEmbeddingLayer(Module):
+    def __init__(self, embedding_dim):
+        """
+        Initialises the read reversal embedding layer. Which indicates whether
+        the read has been reversed so that the 5' end is at the start of the
+        read.
+
+        :param embedding_dim:
+            The dimensionality of the embedding space.
+        """
+        super(ReadReversalEmbeddingLayer, self).__init__()
+        num_reversals = 2
+        self.embedding = nn.Embedding(
+            num_embeddings=num_reversals,
+            embedding_dim=embedding_dim,
+            padding_idx=-1
+        )
+
+    def forward(self, inputs):
+        """
+        Maps the input read reversals to their embeddings.
+
+        :param inputs:
+            A batch of sequences as torch tensors with read reversal indices.
+        :return:
+            The corresponding read reversal embeddings.
+        """
+        embeddings = self.embedding(inputs)
         return embeddings

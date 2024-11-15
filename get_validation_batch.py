@@ -22,7 +22,7 @@ def get_args():
     )
     parser.add_argument('--batch_size', type=int, default=256,
                         help='Batch size for validation data extraction.')
-    parser.add_argument('--max_sequence_length', type=int, default=1024,
+    parser.add_argument('--max_sequence_length', type=int, default=100,
                         help='Maximum sequence length for data loading.')
     parser.add_argument('--min_read_quality', type=int, default=30,
                         help='Minimum read quality.')
@@ -38,7 +38,7 @@ def get_args():
         '--proportion_random', type=float, default=0.1,
         help='Proportion of corrupted labels to be assigned random nucleotides.'
     )
-    parser.add_argument('--kernel_size', type=int, default=15,
+    parser.add_argument('--kernel_size', type=int, default=7,
                         help='Kernel size for the Hyena block.')
     parser.add_argument('--mask_token_index', type=int, default=0,
                         help='Index for the mask token.')
@@ -77,46 +77,55 @@ def main():
 
     # Extract necessary tensors from the batch
     validation_positions = validation_batch['positions']
+    validation_valid_positions = validation_positions != -1
     validation_nucleotide_sequences = validation_batch['nucleotide_sequences']
     validation_base_qualities = validation_batch['base_qualities']
-    validation_read_qualities = validation_batch['read_qualities']
-    validation_cigar_match = validation_batch['cigar_match']
-    validation_cigar_insertion = validation_batch['cigar_insertion']
-    validation_bitwise_flags = validation_batch['bitwise_flags']
-
-    # Combine metrics into one tensor
-    validation_metrics = torch.cat(
-        [
-            validation_base_qualities.unsqueeze(-1),
-            validation_read_qualities.unsqueeze(-1),
-            validation_cigar_match.unsqueeze(-1),
-            validation_cigar_insertion.unsqueeze(-1),
-            validation_bitwise_flags
-        ],
-        dim=-1
-    )
+    validation_cigar_encodings = validation_batch['cigar_encoding']
+    validation_sequenced_from = validation_batch['sequenced_from']
+    validation_read_reversed = validation_batch['reversed']
 
     # Apply masking to the validation batch
     (
-        val_masked_sequences, val_masked_indices, val_replaced_indices,
-        val_kept_indices
+        val_masked_sequences, val_masked_indices, val_replaced_indices
     ) = apply_masking_with_consistent_replacements(
-        validation_positions, validation_nucleotide_sequences,
+        validation_nucleotide_sequences,
         args.mask_token_index, rate=args.corruption_rate,
         mask_rate=1.0 - 2 * args.proportion_random,
-        keep_rate=args.proportion_random, replace_rate=args.proportion_random,
+        replace_rate=args.proportion_random,
         kernel_size=args.kernel_size, split=0.5
     )
+
+    num_replaced = val_replaced_indices.sum().item()
+    val_masked_cigar_encodings = validation_cigar_encodings.clone()
+    val_masked_cigar_encodings[val_masked_indices] = -1
+    val_masked_cigar_encodings[val_replaced_indices] = torch.randint(
+        0, 4, (num_replaced,), dtype=torch.int32
+    )
+    val_masked_base_qualities = validation_base_qualities.clone()
+    val_masked_base_qualities[val_masked_indices] = -1
+    val_masked_base_qualities[val_replaced_indices] = torch.randint(
+        0, 45, (num_replaced,), dtype=torch.int32
+    )
+    val_masked_sequence_from = validation_sequenced_from.clone()
+    val_masked_sequence_from[val_masked_indices] = -1
+    val_masked_read_reversed = validation_read_reversed.clone()
+    val_masked_read_reversed[val_masked_indices] = -1
+
 
     # Prepare tensors to save
     tensors_to_save = {
         'positions': validation_positions,
+        'valid_positions': validation_valid_positions,
         'masked_sequences': val_masked_sequences,
+        'masked_cigar_encodings': val_masked_cigar_encodings,
+        'masked_base_qualities': val_masked_base_qualities,
+        'masked_sequenced_from': val_masked_sequence_from,
+        'masked_read_reversed': val_masked_read_reversed,
         'masked_indices': val_masked_indices,
         'replaced_indices': val_replaced_indices,
-        'kept_indices': val_kept_indices,
-        'metrics': validation_metrics,
-        'nucleotide_sequences': validation_nucleotide_sequences  # Ground truth
+        # Ground truth
+        'nucleotide_sequences': validation_nucleotide_sequences,
+        'base_qualities': validation_base_qualities,
     }
 
     # Save tensors to the specified output directory

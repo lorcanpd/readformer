@@ -333,39 +333,6 @@ def merge_bam_files(temp_bam_files, output_bam_path):
     os.remove(merged_unsorted_bam)
 
 
-# def merge_vcf_files(temp_vcf_files, output_vcf_path):
-#     """
-#     Merge per-sample VCF files into a composite VCF file.
-#     """
-#     temp_vcf_files = [f for f in temp_vcf_files if os.path.exists(f)]
-#     if len(temp_vcf_files) == 0:
-#         print("No VCF files to merge.")
-#         return
-#
-#     merged_unsorted_vcf = output_vcf_path + '.unsorted.vcf'
-#
-#     # Concatenate VCF files
-#     with open(merged_unsorted_vcf, 'w') as outfile:
-#         for idx, vcf_file in enumerate(temp_vcf_files):
-#             with open(vcf_file, 'r') as infile:
-#                 for line in infile:
-#                     if line.startswith('#'):
-#                         if idx == 0:
-#                             outfile.write(line)
-#                         continue
-#                     outfile.write(line)
-#
-#     # Sort the merged VCF
-#     sorted_vcf = output_vcf_path + '.sorted.vcf'
-#     pysam.sort('-o', sorted_vcf, merged_unsorted_vcf)
-#     # Compress and index the VCF file
-#     pysam.tabix_compress(output_vcf_path, output_vcf_path + '.gz', force=True)
-#     pysam.tabix_index(output_vcf_path + '.gz', preset='vcf', force=True)
-#
-#     os.remove(merged_unsorted_vcf)
-#     os.remove(sorted_vcf)
-
-
 def merge_vcf_files(temp_vcf_files, output_vcf_path):
     """
     Merge per-sample VCF files into a sorted composite VCF file using a k-way

@@ -194,7 +194,6 @@ def generate_random_for_unique_positions(positions):
         A tuple of lists containing unique positions and random values for each
         unique position in the input sequence.
     """
-    breakpoint()
     batch_size, seq_length = positions.size()
     unique_values = []
     unique_randoms = []
@@ -346,7 +345,9 @@ def generate_gaussian_probabilities(positions, kernel_size, bias=0.01):
     return gaussian_probs_mapped
 
 
-def generate_span_masking_probabilities(positions, span_size, corruption_rate):
+def generate_span_mask(
+        batch_size, seq_length, span_size, corruption_rate, device
+):
     """
     Generate probabilities for masking spans of positions, where the number of
     spans is proportional to the corruption rate.
@@ -360,7 +361,6 @@ def generate_span_masking_probabilities(positions, span_size, corruption_rate):
     :return:
         A tensor of shape (batch_size, seq_length) with span masking probabilities.
     """
-    batch_size, seq_length = positions.size()
 
     # Determine the number of spans based on the corruption rate and span size
     num_spans = max(1, int(seq_length * corruption_rate / span_size))
@@ -368,67 +368,54 @@ def generate_span_masking_probabilities(positions, span_size, corruption_rate):
     # Randomly select span centers
     span_centers = torch.randint(
         0, seq_length - span_size + 1, (batch_size, num_spans),
-        device=positions.device
+        device=device
     )
 
     # Generate probabilities for each span, initialized to 1
-    span_probabilities = torch.ones(
-        (batch_size, seq_length), device=positions.device)
+    # span_probabilities = torch.ones(
+    #     (batch_size, seq_length), device=positions.device)
+
+    # Create a tensor of False values with shape (batch_size, seq_length)
+    span_mask = torch.zeros(
+        (batch_size, seq_length), dtype=torch.bool, device=device
+    )
 
     # Create the range of indices to zero out spans
-    span_offsets = torch.arange(span_size, device=positions.device)  # Shape: (span_size,)
+    span_offsets = torch.arange(span_size, device=device)  # Shape: (span_size,)
     span_indices = (span_centers.unsqueeze(-1) + span_offsets) % seq_length  # Shape: (batch_size, num_spans, span_size)
 
     # Use advanced indexing to zero out the spans in a fully vectorized way
-    batch_indices = torch.arange(batch_size, device=positions.device).view(-1, 1, 1)  # Shape: (batch_size, 1, 1)
-    span_probabilities[batch_indices, span_indices] = 0.0
+    batch_indices = torch.arange(batch_size, device=device).view(-1, 1, 1)  # Shape: (batch_size, 1, 1)
+    span_mask[batch_indices, span_indices] = True
 
-    return span_probabilities
+    return span_mask
 
 
-def generate_uniform_position_probabilities(positions):
+def generate_uniform_mask(inputs, mask_rate):
     """
-    Generate uniform masking probabilities for individual positions without
-    any spatial bias. The function generates uniform probabilities over unique
-    positions and maps them back to the original positions.
+    Generate a boolean mask for uniform masking of the input tensor. The mask
+    shape is the same as the input tensor, with True values indicating positions
+    to be masked. Each position has a probability of `mask_rate` to be masked.
 
-    :param positions:
-        Tensor of shape (batch_size, seq_length) representing genomic positions.
+    :param inputs:
+        The input tensor for which to generate the mask.
+    :param mask_rate:
+        The probability of masking each position.
+
     :return:
-        A tensor of shape (batch_size, seq_length) with uniform masking probabilities.
+        A boolean mask tensor with the same shape as the input tensor.
     """
-    batch_size, seq_length = positions.size()
-
-    # Flatten positions for easier processing across the entire batch
-    positions_flat = positions.view(-1)
-
-    # Generate unique positions across the batch and get the inverse indices
-    unique_positions, inverse_indices = torch.unique(
-        positions_flat, return_inverse=True
-    )
-    num_unique_pos = unique_positions.size(0)
-
-    # Generate probabilities for each unique position with uniform distribution
-    probs = torch.rand(num_unique_pos, device=positions.device)
-
-    # Map the uniform probabilities back to the original position space
-    probs_mapped_flat = probs[inverse_indices]
-
-    # Reshape to match the original positions tensor shape
-    probs_mapped = probs_mapped_flat.view(batch_size, seq_length)
-
-    return probs_mapped
+    mask = torch.rand_like(inputs) < mask_rate
+    return mask
 
 
 def apply_masking_with_consistent_replacements(
-        positions, nucleotide_sequences, mask_token, rate=0.15, mask_rate=0.8,
-        keep_rate=0.1, replace_rate=0.1, kernel_size=5, split=0.5
+        nucleotide_sequences, mask_token, rate=0.15, mask_rate=0.8,
+        replace_rate=0.1, kernel_size=5, split=0.5
 ):
     """
     Apply masking and consistent replacements with a mix of span-based and uniform masking.
 
-    :param positions:
-        Tensor of shape (batch_size, seq_length) representing genomic positions.
     :param nucleotide_sequences:
         Tensor of shape (batch_size, seq_length) representing nucleotide sequences.
     :param mask_token:
@@ -437,8 +424,6 @@ def apply_masking_with_consistent_replacements(
         The overall corruption rate.
     :param mask_rate:
         Proportion of corrupted tokens to replace with the mask token.
-    :param keep_rate:
-        Proportion of corrupted tokens to keep unchanged.
     :param replace_rate:
         Proportion of corrupted tokens to replace randomly among other tokens.
     :param kernel_size:
@@ -451,40 +436,39 @@ def apply_masking_with_consistent_replacements(
             masked_sequence, mask_indices, replace_indices, keep_indices).
     """
 
-    true_mask_rate = rate * mask_rate
-    true_keep_rate = rate * keep_rate
-    true_replace_rate = rate * replace_rate
+    # true_mask_rate = rate * mask_rate
+    # # true_keep_rate = rate * keep_rate
+    # true_replace_rate = rate * replace_rate
 
     batch_size, seq_length = nucleotide_sequences.size()
+    random_probs = torch.rand((batch_size, seq_length), device=nucleotide_sequences.device)
 
     # Split the batch into two parts based on the split argument
     split_index = int(split * batch_size)
-    span_masking_batch = positions[:split_index]
-    # uniform_masking_batch = positions[split_index:]
+    # span_masking_batch = positions[:split_index]
+    # uniform_masking_batch = positions[split_index:].to(torch.float32)
 
-    # Generate span-based masking probabilities for the first part of the batch
-    span_mask = generate_span_masking_probabilities(
-        span_masking_batch, kernel_size, rate
+    # Generate span-based masking for the first part of the batch
+    batch_size, seq_length = random_probs[:split_index].shape
+    span_mask = generate_span_mask(
+        batch_size, seq_length, kernel_size, rate,
+        device=nucleotide_sequences.device
     )
 
-    # Generate uniform masking probabilities for the second part of the batch
-    uniform_masking_probs = generate_uniform_position_probabilities(
-        positions
+    # Generate uniform masking for the second part of the batch
+    uniform_mask = generate_uniform_mask(
+        random_probs[split_index:], rate
     )
 
     # Combine the span-based and uniform masking probabilities
-    combined_masking_probs = torch.cat(
-        [span_mask, uniform_masking_probs[split_index:]], dim=0
+    initial_mask = torch.cat(
+        [span_mask, uniform_mask], dim=0
     )
 
     # Create the final masking decision
-    random_probs = torch.rand(
-        (batch_size, seq_length), device=nucleotide_sequences.device)
-    mask_indices = combined_masking_probs < true_mask_rate
-    replace_indices = (random_probs >= true_mask_rate) & (
-            random_probs < true_mask_rate + true_replace_rate)
-    keep_indices = (random_probs >= true_mask_rate + true_replace_rate) & (
-            random_probs < rate)
+    mask_indices = initial_mask & (random_probs <= mask_rate)
+    replace_indices = initial_mask & (mask_rate < random_probs) & (
+            random_probs <= mask_rate + replace_rate)
     # Apply the masking
     masked_sequence = nucleotide_sequences.clone()
     masked_sequence[mask_indices] = mask_token
@@ -492,7 +476,6 @@ def apply_masking_with_consistent_replacements(
     if replace_indices.sum() > 0:
         bases = [0, 1, 2, 3]
         random.shuffle(bases)
-
 
         masked_sequence[replace_indices] = bases[0]
 
@@ -510,7 +493,10 @@ def apply_masking_with_consistent_replacements(
             replacement_invalid_mask = (
                 masked_sequence == nucleotide_sequences) & replace_indices
 
-    return masked_sequence, mask_indices, replace_indices, keep_indices
+    return masked_sequence, mask_indices, replace_indices
+
+
+
 
 
 def get_random_alternative_labels(original_labels, mlm=True):
@@ -552,9 +538,11 @@ def load_validation_tensors(validation_dir):
     """Load validation tensors from the specified directory."""
     tensor_dict = {}
     tensor_names = [
-        'positions', 'masked_sequences', 'masked_indices',
-        'replaced_indices', 'kept_indices', 'metrics',
-        'nucleotide_sequences'  # Ground truth for evaluation
+        'positions', 'valid_positions',
+        'masked_sequences', 'masked_cigar_encodings',
+        'masked_base_qualities', 'masked_sequenced_from',
+        'masked_read_reversed', 'masked_indices', 'replaced_indices',
+        'nucleotide_sequences', 'base_qualities'
     ]
 
     for name in tensor_names:

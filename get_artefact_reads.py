@@ -42,10 +42,10 @@ def parse_arguments():
         '--bed_file', required=True,
         help='Path to the high-confidence BED file.'
     )
-    # parser.add_argument(
-    #     '--reference_fasta', required=True,
-    #     help='Path to the reference FASTA file.'
-    # )
+    parser.add_argument(
+        '--reference_fasta', required=True,
+        help='Path to the reference FASTA file.'
+    )
     parser.add_argument(
         '--output_bam', required=True,
         help='Output path for the artifact BAM file.'
@@ -116,6 +116,16 @@ def detect_chrom_prefix(bam_file):
                 return "chr"
     return ""
 
+
+def detect_chrom_prefix_fasta(fasta_file):
+    """
+    Detect whether chromosome names in a FASTA file are prefixed with 'chr'.
+    """
+    with pysam.FastaFile(fasta_file) as fasta:
+        for ref in fasta.references[:10]:  # Check the first 10 references
+            if ref.startswith("chr"):
+                return "chr"
+    return ""
 
 def read_bed_file(bed_file):
     """
@@ -492,7 +502,7 @@ def process_chunk(
 ):
     (
         chunk, args, temp_dir, chunk_id, first_bam_chrom_prefix,
-        second_bam_chrom_prefix
+        second_bam_chrom_prefix, reference_fasta, fasta_prefix
     ) = args_tuple
     illumina_bam_path = args.illumina_bam
     pacbio_bam_path = args.pacbio_bam
@@ -503,6 +513,10 @@ def process_chunk(
     # Open BAM files
     illumina_bam = pysam.AlignmentFile(illumina_bam_path, 'rb')
     pacbio_bam = pysam.AlignmentFile(pacbio_bam_path, 'rb')
+
+    # Open reference FASTA file
+    reference_fasta = pysam.FastaFile(reference_fasta)
+
 
     # Temporary BAM and VCF files for this chunk
     temp_bam_path = os.path.join(temp_dir, f"temp_{chunk_id:09d}.bam")
@@ -522,8 +536,8 @@ def process_chunk(
         chrom, start, end = region
         illumina_chrom = first_bam_chrom_prefix + chrom
         pacbio_chrom = second_bam_chrom_prefix + chrom
-        # Fetch Illumina pileup columns in this region
 
+        # Fetch Illumina pileup columns in this region
         for pileupcolumn in illumina_bam.pileup(
                 illumina_chrom, start, end, min_base_quality=baseq_threshold,
                 min_mapping_quality=mapq_threshold, truncate=True
@@ -554,7 +568,7 @@ def process_chunk(
             # Identify positions where alternate alleles are supported by exactly one read
             if len(base_counts) > 1:
                 # Check that illumina coverage is at least 30
-                if sum(base_counts.values()) >= 30:
+                if sum(base_counts.values()) >= 40:
                     for base, count in base_counts.items():
                         if count == 1:
                             # This base is supported by exactly one read
@@ -580,34 +594,39 @@ def process_chunk(
                                             artifact_read = reads_at_pos[read_name]
                                             # Get the index of the base on the read
                                             position_on_read = artifact_read.get_reference_positions().index(pos)
-                                            temp_bam.write(artifact_read)
 
-                                            # Exclude the artifact read when determining context
-                                            exclude_read_name = read_name
+                                            # Determine the 5' end of the read
+                                            if artifact_read.is_reverse:
+                                                # Check position on the read is
+                                                # within 100bp of the 5' end, which
+                                                # if the read is reversed is the end
+                                                # of the read
+                                                read_length = artifact_read.infer_query_length()
+                                                if read_length - 100 > position_on_read:
+                                                    continue
+                                            else:
+                                                # Check position on the read is
+                                                # within 100bp of the 5' end
+                                                if position_on_read > 100:
+                                                    continue
 
-                                            ref_base = max(base_counts, key=base_counts.get)
+                                            majority_base = max(base_counts, key=base_counts.get)
+                                            # Get tri-nucleotide context from the reference
+                                            trinuc = reference_fasta.fetch(chrom, pos - 1, pos + 2)
+                                            ref_base = trinuc[1]
 
-                                            # Get majority base at left position
-                                            left_pos = pos - 1
-                                            left_base = get_majority_base_from_reads(
-                                                illumina_bam,
-                                                illumina_chrom,
-                                                left_pos,
-                                                mapq_threshold, baseq_threshold,
-                                                exclude_read_name
-                                            )
+                                            # If ref base doesn't match the majority base, skip
+                                            if ref_base != majority_base:
+                                                continue
 
-                                            # Get majority base at right position
-                                            right_pos = pos + 1
-                                            right_base = get_majority_base_from_reads(
-                                                illumina_bam, illumina_chrom, right_pos,
-                                                mapq_threshold, baseq_threshold,
-                                                exclude_read_name
-                                            )
+                                            left_base = trinuc[0]
+                                            right_base = trinuc[2]
 
                                             # Check if we have valid bases
                                             if None in [left_base, right_base, ref_base]:
                                                 continue
+
+                                            temp_bam.write(artifact_read)
 
                                             # Classify the mutation
                                             mutation_type = classify_mutation(
@@ -861,7 +880,11 @@ def main():
     illumina_chrom_prefix = detect_chrom_prefix(args.illumina_bam)
     pacbio_chrom_prefix = detect_chrom_prefix(args.pacbio_bam)
     # Read BED files
-    high_conf_regions = read_bed_file(args.bed_file)[:8000]  # TODO: REMOVE THIS
+    high_conf_regions = read_bed_file(args.bed_file)  # TODO: If testing locally take a subset of this.
+
+    reference_fasta = args.reference_fasta
+
+    reference_prefix = detect_chrom_prefix_fasta(reference_fasta)
 
     if args.low_complexity_bed:
         low_complexity_regions = read_bed_file(args.low_complexity_bed)
@@ -878,7 +901,7 @@ def main():
         tasks.append(
             (
                 chunk, args, temp_dir, i, illumina_chrom_prefix,
-                pacbio_chrom_prefix
+                pacbio_chrom_prefix, reference_fasta, reference_prefix
             )
         )
 
