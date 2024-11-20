@@ -87,3 +87,51 @@ def calculate_perplexity(logits, targets):
 
     return perplexity.item()
 
+
+def beta_nll_loss(alpha, beta, y_true, eps=1e-9):
+    """
+    Compute the negative log likelihood (NLL) of the true label y_true under the
+    predicted Beta distribution defined by parameters alpha and beta.
+    """
+    y_true = y_true.clamp(eps, 1 - eps)  # Avoid log(0)
+    log_prob = torch.lgamma(alpha + beta) - torch.lgamma(alpha) - torch.lgamma(beta)
+    log_prob += (alpha - 1) * torch.log(y_true) + (beta - 1) * torch.log(1 - y_true)
+    nll = -log_prob
+    return nll.sum()
+
+
+def class_balanced_beta_nll_loss(
+        alpha, beta, y_true, weighting=None, eps=1e-12
+):
+    """
+    Compute the Class-Balanced negative log likelihood (NLL) of the true label
+
+    :param alpha:
+        The predicted alpha parameter of the Beta distribution.
+    :param beta:
+        The predicted beta parameter of the Beta distribution.
+    :param y_true:
+        The true labels.
+    :param weighting:
+        The weighting to apply to the loss. This should be the product of the
+        inverse effective number of samples in each class (artefact or mutation)
+        and the inverse effective number of samples per unique
+        mutation/artefact.
+    :param eps:
+        A small value to avoid log(0).
+    :return:
+        The Class-Balanced negative log likelihood.
+    """
+
+    y_true = y_true.clamp(eps, 1 - eps)  # Avoid log(0)
+    log_prob = torch.lgamma(alpha + beta) - torch.lgamma(alpha) - torch.lgamma(beta)
+    log_prob += (alpha - 1) * torch.log(y_true) + (beta - 1) * torch.log(1 - y_true)
+    nll = -log_prob
+
+    # Apply class weights
+    if weighting is not None:
+        nll = nll * weighting
+
+    return nll.sum()
+
+

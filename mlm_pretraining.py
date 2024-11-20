@@ -9,7 +9,7 @@ from components.classification_head import (
     # TransformerBinaryClassifier,
     MLMClassifier, MLMLoss
 )
-from components.pretrain_utils import (
+from components.utils import (
     # replacement_loss,
     # get_replacement_mask,
     # adversarial_loss,

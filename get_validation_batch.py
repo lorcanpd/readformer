@@ -3,7 +3,7 @@ from torch.utils.data import DataLoader
 import argparse
 import os
 from components.data_streaming import create_data_loader
-from components.pretrain_utils import apply_masking_with_consistent_replacements
+from components.utils import apply_masking_with_consistent_replacements
 
 
 def get_args():

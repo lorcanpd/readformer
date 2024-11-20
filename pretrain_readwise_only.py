@@ -13,7 +13,7 @@ from components.read_embedding import (
     ReadReversalEmbeddingLayer
 )
 from components.classification_head import MLMClassifier
-from components.pretrain_utils import (
+from components.utils import (
     apply_masking_with_consistent_replacements,
     load_validation_tensors
 )
