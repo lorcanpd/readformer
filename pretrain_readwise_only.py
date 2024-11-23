@@ -3,14 +3,14 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.optim import AdamW
 from torch.optim.lr_scheduler import OneCycleLR
-from components.data_streaming import create_data_loader
+from components.pretrain_data_streaming import create_data_loader
 from components.base_model import Model, init_weights
 from components.read_embedding import (
     NucleotideEmbeddingLayer,
     CigarEmbeddingLayer,
     BaseQualityEmbeddingLayer,
-    SequencingDirectionEmbeddingLayer,
-    ReadReversalEmbeddingLayer
+    StrandEmbeddingLayer,
+    MatePairEmbeddingLayer
 )
 from components.classification_head import MLMClassifier
 from components.utils import (
@@ -179,7 +179,7 @@ def load_checkpoint(
         model, classifier, base_quality_classifier,
         nucleotide_embeddings,
         cigar_embeddings, base_quality_embeddings,
-        sequencing_direction_embeddings, read_reversal_embeddings,
+        strand_embeddings, mate_pair_embeddings,
         gate_projection, feature_projection,
         # float_metric_embeddings, binary_metric_embeddings,
         # metric_embeddings,
@@ -193,11 +193,10 @@ def load_checkpoint(
         classifier.load_state_dict(checkpoint['classifier_state_dict'])
         base_quality_classifier.load_state_dict(checkpoint['base_quality_classifier_state_dict'])
         nucleotide_embeddings.load_state_dict(checkpoint['nucleotide_embeddings_state_dict'])
-        # metric_embeddings.load_state_dict(checkpoint['metric_embeddings_state_dict'])
         cigar_embeddings.load_state_dict(checkpoint['cigar_embeddings_state_dict'])
         base_quality_embeddings.load_state_dict(checkpoint['base_quality_embeddings_state_dict'])
-        sequencing_direction_embeddings.load_state_dict(checkpoint['sequencing_direction_embeddings_state_dict'])
-        read_reversal_embeddings.load_state_dict(checkpoint['read_reversal_embeddings_state_dict'])
+        strand_embeddings.load_state_dict(checkpoint['strand_embeddings_state_dict'])
+        mate_pair_embeddings.load_state_dict(checkpoint['mate_pair_embeddings_state_dict'])
         gate_projection.load_state_dict(checkpoint['gate_projection_state_dict'])
         feature_projection.load_state_dict(checkpoint['feature_projection_state_dict'])
         optimiser.load_state_dict(checkpoint['optimiser_state_dict'])
@@ -372,10 +371,10 @@ def main():
     base_quality_embeddings = BaseQualityEmbeddingLayer(
         emb_dim // 4
     ).apply(init_weights).to(device)
-    sequencing_direction_embeddings = SequencingDirectionEmbeddingLayer(
+    strand_embeddings = StrandEmbeddingLayer(
         emb_dim // 4
     ).apply(init_weights).to(device)
-    read_reversal_embeddings = ReadReversalEmbeddingLayer(
+    mate_pair_embeddings = MatePairEmbeddingLayer(
         emb_dim // 4
     ).apply(init_weights).to(device)
 
@@ -389,7 +388,7 @@ def main():
         num_hyena=num_hyena, num_attention=num_attention
     ).apply(init_weights).to(device).train()
     # Don't train the self attention yet.
-    readformer.set_use_positionwise_self_attention(False)
+    # readformer.set_use_positionwise_self_attention(False)
 
     classifier = MLMClassifier(
         emb_dim=emb_dim, num_classes=nucleotide_embeddings.padding_idx
@@ -402,14 +401,13 @@ def main():
             # list(metric_embeddings.parameters()) +
             list(cigar_embeddings.parameters()) +
             list(base_quality_embeddings.parameters()) +
-            list(sequencing_direction_embeddings.parameters()) +
-            list(read_reversal_embeddings.parameters()) +
+            list(strand_embeddings.parameters()) +
+            list(mate_pair_embeddings.parameters()) +
             list(gate_projection.parameters()) +
             list(feature_projection.parameters()) +
             list(readformer.parameters()) +
             list(classifier.parameters()) +
             list(base_quality_classifier.parameters())
-            # list(metric_classifier.parameters())
     )
     # optimiser = torch.optim.Adam(
     #     params, lr=main_lr,
@@ -444,7 +442,7 @@ def main():
             nucleotide_embeddings,
             # metric_embeddings,
             cigar_embeddings, base_quality_embeddings,
-            sequencing_direction_embeddings, read_reversal_embeddings,
+            strand_embeddings, mate_pair_embeddings,
             gate_projection, feature_projection,
             optimiser
         )
@@ -511,9 +509,9 @@ def main():
         batch_size=batch_size//contrastive_denominator,
         min_quality=min_read_quality,
         shuffle=True,
-        num_workers=get_allocated_cpus()-1,
-        # num_workers=0,
-        prefetch_factor=4
+        # num_workers=get_allocated_cpus()-1,
+        num_workers=0,
+        # prefetch_factor=4
     )
     logging.info(f"Data loader created")
 
@@ -522,13 +520,13 @@ def main():
     validation_valid_mask = validation_batch['valid_positions'].to(device)
     validation_positions = validation_batch['positions'].to(device)
     validation_masked_sequences = validation_batch['masked_sequences'].to(device)
+    validation_masked_indices = validation_batch['masked_indices'].to(device)
     validation_replaced_indices = validation_batch['replaced_indices'].to(device)
     validation_masked_cigar_encodings = validation_batch['masked_cigar_encodings'].to(device)
     validation_masked_base_qualities = validation_batch['masked_base_qualities'].to(device)
-    validation_masked_sequenced_from = validation_batch['masked_sequenced_from'].to(device)
-    validation_masked_read_reversed = validation_batch['masked_read_reversed'].to(device)
-    validation_masked_sequences = validation_batch['masked_sequences'].to(device)
-    validation_masked_indices = validation_batch['masked_indices'].to(device)
+    validation_masked_mapped_to_reverse = validation_batch['masked_mapped_to_reverse'].to(device)
+    validation_masked_is_first = validation_batch['masked_is_first'].to(device)
+
     # ground truth
     validation_nucleotide_sequences = validation_batch['nucleotide_sequences'].to(device)
     validation_base_qualities = validation_batch['base_qualities'].to(device)
@@ -564,16 +562,16 @@ def main():
         base_qualities = batch['base_qualities']
         cigar_encodings = batch['cigar_encoding']
         positions = batch['positions']
-        sequenced_from = batch['sequenced_from']
-        read_reversed = batch['reversed']
+        is_first = batch['is_first']
+        mapped_reverse = batch['mapped_to_reverse']
         
         positions = positions.to(device)
         valid_mask = valid_mask.to(device)
         nucleotide_sequences = nucleotide_sequences.to(device)
         base_qualities = base_qualities.to(device)
         cigar_encodings = cigar_encodings.to(device)
-        sequenced_from = sequenced_from.to(device)
-        read_reversed = read_reversed.to(device)
+        is_first = is_first.to(device)
+        mapped_reverse = mapped_reverse.to(device)
 
         # Duplicate the samples to create a batch of size batch_size
         nucleotide_sequences = torch.cat(
@@ -596,15 +594,14 @@ def main():
             [cigar_encodings for _ in range(contrastive_denominator)],
             dim=0
         )
-        sequenced_from = torch.cat(
-            [sequenced_from for _ in range(contrastive_denominator)],
+        is_first = torch.cat(
+            [is_first for _ in range(contrastive_denominator)],
             dim=0
         )
-        read_reversed = torch.cat(
-            [read_reversed for _ in range(contrastive_denominator)],
+        mapped_reverse = torch.cat(
+            [mapped_reverse for _ in range(contrastive_denominator)],
             dim=0
         )
-
 
         with ((device_context(device))):
             (
@@ -629,10 +626,10 @@ def main():
             masked_base_qualities[replaced_indices] = torch.randint(
                 0, 45, (num_replaced,), dtype=torch.int32, device=device
             )
-            masked_sequenced_from = sequenced_from.clone().to(device)
-            masked_sequenced_from[masked_indices] = -1
-            masked_read_reversed = read_reversed.clone().to(device)
-            masked_read_reversed[masked_indices] = -1
+            masked_is_first = is_first.clone().to(device)
+            masked_is_first[masked_indices] = -1
+            masked_mapped_reverse = mapped_reverse.clone().to(device)
+            masked_mapped_reverse[masked_indices] = -1
 
             masked_nucleotide_emb = nucleotide_embeddings(masked_sequences)
 
@@ -641,8 +638,8 @@ def main():
                 [
                     cigar_embeddings(masked_cigar_encodings),
                     base_quality_embeddings(masked_base_qualities),
-                    sequencing_direction_embeddings(masked_sequenced_from),
-                    read_reversal_embeddings(masked_read_reversed)
+                    strand_embeddings(masked_mapped_reverse),
+                    mate_pair_embeddings(masked_is_first)
                 ],
                 dim=-1
             )
@@ -791,8 +788,8 @@ def main():
                     [
                         cigar_embeddings(validation_masked_cigar_encodings),
                         base_quality_embeddings(validation_masked_base_qualities),
-                        sequencing_direction_embeddings(validation_masked_sequenced_from),
-                        read_reversal_embeddings(validation_masked_read_reversed)
+                        strand_embeddings(validation_masked_mapped_to_reverse),
+                        mate_pair_embeddings(validation_masked_is_first)
                     ],
                     dim=-1
                 )
@@ -1016,10 +1013,10 @@ def main():
                     'cigar_embeddings_state_dict': cigar_embeddings.state_dict(),
                     'base_quality_embeddings_state_dict':
                         base_quality_embeddings.state_dict(),
-                    'sequencing_direction_embeddings_state_dict':
-                        sequencing_direction_embeddings.state_dict(),
-                    'read_reversal_embeddings_state_dict':
-                        read_reversal_embeddings.state_dict(),
+                    'strand_embeddings_state_dict':
+                        strand_embeddings.state_dict(),
+                    'mate_pair_embeddings_state_dict':
+                        mate_pair_embeddings.state_dict(),
                     'gate_projection_state_dict':
                         gate_projection.state_dict(),
                     'feature_projection_state_dict':

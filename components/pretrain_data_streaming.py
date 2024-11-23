@@ -11,31 +11,31 @@ import multiprocessing as mp
 import logging
 
 
-def replicate_binary_flag_vector_list(
-        binary_flag_vector, sequence_length
-):
-    """
-    Replicates a binary flag vector for each nucleotide position in the sequence
-    using lists.
-
-    :param binary_flag_vector:
-        The binary flag vector for a read.
-    :param sequence_length:
-        The actual sequence length of the read.
-    :return:
-        A replicated binary flag vector of shape (sequence_length, vector_size).
-    """
-    # Initialize the replicated list with zeros
-    replicated_vector = [
-        [0] * len(binary_flag_vector) for _ in range(sequence_length)
-    ]
-
-    # Fill the replicated list with the binary_flag_vector values up to the
-    # sequence length
-    for i in range(sequence_length):
-        replicated_vector[i] = binary_flag_vector.copy()
-
-    return replicated_vector
+# def replicate_binary_flag_vector_list(
+#         binary_flag_vector, sequence_length
+# ):
+#     """
+#     Replicates a binary flag vector for each nucleotide position in the sequence
+#     using lists.
+#
+#     :param binary_flag_vector:
+#         The binary flag vector for a read.
+#     :param sequence_length:
+#         The actual sequence length of the read.
+#     :return:
+#         A replicated binary flag vector of shape (sequence_length, vector_size).
+#     """
+#     # Initialize the replicated list with zeros
+#     replicated_vector = [
+#         [0] * len(binary_flag_vector) for _ in range(sequence_length)
+#     ]
+#
+#     # Fill the replicated list with the binary_flag_vector values up to the
+#     # sequence length
+#     for i in range(sequence_length):
+#         replicated_vector[i] = binary_flag_vector.copy()
+#
+#     return replicated_vector
 
 
 # TODO: Write data streaming code for specific mutation positions.
@@ -115,76 +115,56 @@ class BAMReadDataset(Dataset):
         nucleotide_sequences = []
         base_qualities = []
         cigar_encoding = []
-        sequenced_from = []  # 0 for 5' to 3', 1 for 3' to 5'
         positions = []
-        is_reversed = []
+        is_first_flags = []
+        mapped_to_reverse_flags = []
         total_sequence_length = 0
 
         # Parse read data
         for read in read_info.values():
-            # use orientation flags to ensure 5' is always at the start of the
-            # sequence. Then create an orientation flag for each nucleotide
-            # to represent the direction the read was sequenced from.
-            to_be_reversed = read['orientation_flags'].get('is_reverse', 0)
-            is_first = read['orientation_flags'].get('is_first_in_pair', 0)
-            is_second = read['orientation_flags'].get('is_second_in_pair', 0)
-            if to_be_reversed:
-                need_to_reverse = True
-                # R2 sequenced from 3', R1 from 5'
-                sequenced_from_five_end = 1 if is_second else 0
-            else:
-                need_to_reverse = False
-                # R1 sequenced from 5', R2 from 3'
-                sequenced_from_five_end = 0 if is_first else 1
+            is_first = read['orientation_flags'].get('is_first_in_pair', False)
+            mapped_to_reverse = read['orientation_flags'].get('is_reverse', False)
 
-            sequence_length = len(read['query_sequence'])
-            if need_to_reverse:
-                nucleotide_sequences += list(read['query_sequence'][::-1])
-                base_qualities += list(read['base_qualities'][::-1])
+            if mapped_to_reverse:
+                # Get the reverse complement of the sequence and reverse the
+                # order of the nucleotides, base qualities, cigar encoding, and
+                # positions
+                nucleotide_sequences += list(
+                    get_reverse_complement(read['query_sequence']))[::-1]
+                base_qualities += read['base_qualities'][::-1]
                 cigar_encoding += read['cigar_encoding'][::-1]
-                sequenced_from += [sequenced_from_five_end] * sequence_length
                 positions += read['positions'][::-1]
-                is_reversed += [1] * sequence_length
             else:
                 nucleotide_sequences += list(read['query_sequence'])
                 base_qualities += read['base_qualities']
                 cigar_encoding += read['cigar_encoding']
-                sequenced_from += [sequenced_from_five_end] * sequence_length
                 positions += read['positions']
-                is_reversed += [0] * sequence_length
 
-            # Clip reads over the threshold, so that the total sequence length
-            # does not exceed the threshold. Reads must be clipped so that
-            # the sequence includes the end sequencing began from.
-            if sequence_length > self.nucleotide_threshold:
-                # Here 0 is 5' to 3' and 1 is 3' to 5'
-                if sequenced_from_five_end == 0:
-                    nucleotide_sequences = nucleotide_sequences[:self.nucleotide_threshold]
-                    base_qualities = base_qualities[:self.nucleotide_threshold]
-                    cigar_encoding = cigar_encoding[:self.nucleotide_threshold]
-                    sequenced_from = sequenced_from[:self.nucleotide_threshold]
-                    positions = positions[:self.nucleotide_threshold]
-                    is_reversed = is_reversed[:self.nucleotide_threshold]
-                else:
-                    nucleotide_sequences = nucleotide_sequences[-self.nucleotide_threshold:]
-                    base_qualities = base_qualities[-self.nucleotide_threshold:]
-                    cigar_encoding = cigar_encoding[-self.nucleotide_threshold:]
-                    sequenced_from = sequenced_from[-self.nucleotide_threshold:]
-                    positions = positions[-self.nucleotide_threshold:]
-                    is_reversed = is_reversed[-self.nucleotide_threshold:]
+            sequence_length = len(read['query_sequence'])
 
-                sequence_length = len(nucleotide_sequences)
+            # Append flags per nucleotide
+            is_first_flags += [0 if is_first else 1] * sequence_length
+            mapped_to_reverse_flags += [1 if mapped_to_reverse else 0] * sequence_length
 
             total_sequence_length += sequence_length
 
-        # Pad sequences to the threshold length
-        padding_length = self.max_sequence_length - total_sequence_length
+        # Trim sequences to the nucleotide threshold
+        if total_sequence_length > self.nucleotide_threshold:
+            nucleotide_sequences = nucleotide_sequences[:self.nucleotide_threshold]
+            base_qualities = base_qualities[:self.nucleotide_threshold]
+            cigar_encoding = cigar_encoding[:self.nucleotide_threshold]
+            positions = positions[:self.nucleotide_threshold]
+            is_first_flags = is_first_flags[:self.nucleotide_threshold]
+            mapped_to_reverse_flags = mapped_to_reverse_flags[:self.nucleotide_threshold]
+
+        # Pad sequences to the max sequence length
+        padding_length = self.max_sequence_length - len(nucleotide_sequences)
         nucleotide_sequences += [''] * padding_length
         base_qualities += [-1] * padding_length
         cigar_encoding += [-1] * padding_length
-        sequenced_from += [-1] * padding_length
         positions += [-1] * padding_length
-        is_reversed += [-1] * padding_length
+        is_first_flags += [-1] * padding_length
+        mapped_to_reverse_flags += [-1] * padding_length
 
         logging.debug(
             f"Returning batch, number of nucleotide sequences: {len(nucleotide_sequences)}"
@@ -194,9 +174,9 @@ class BAMReadDataset(Dataset):
             'nucleotide_sequences': nucleotide_sequences,
             'base_qualities': base_qualities,
             'cigar_encoding': cigar_encoding,
-            'sequenced_from': sequenced_from,
             'positions': positions,
-            'reversed': is_reversed
+            'is_first': is_first_flags,
+            'mapped_to_reverse': mapped_to_reverse_flags
         }
 
 
@@ -287,6 +267,25 @@ nucleotide_to_index = {
     'K': 8, 'M': 9, 'B': 10, 'D': 11, 'H': 12, 'V': 13, 'N': 14, '': 15
 }
 
+reverse_complement = {
+    'A': 'T',  # Adenine pairs with Thymine
+    'C': 'G',  # Cytosine pairs with Guanine
+    'G': 'C',  # Guanine pairs with Cytosine
+    'T': 'A',  # Thymine pairs with Adenine
+    'R': 'Y',  # Purine (A or G) pairs with Pyrimidine (T or C)
+    'Y': 'R',  # Pyrimidine (T or C) pairs with Purine (A or G)
+    'S': 'S',  # Strong interaction (C or G), reverse complement is itself
+    'W': 'W',  # Weak interaction (A or T), reverse complement is itself
+    'K': 'M',  # Keto (G or T) pairs with Amino (A or C)
+    'M': 'K',  # Amino (A or C) pairs with Keto (G or T)
+    'B': 'V',  # Not A (C or G or T) pairs with Not T (A or C or G)
+    'D': 'H',  # Not C (A or G or T) pairs with Not G (A or T or C)
+    'H': 'D',  # Not G (A or C or T) pairs with Not C (A or G or T)
+    'V': 'B',  # Not T (A or C or G) pairs with Not A (C or G or T)
+    'N': 'N',  # Any base (A, C, G, T), reverse complement is itself
+    '': ''     # Empty character, remains unchanged
+}
+
 
 def encode_nucleotides(sequence):
     """
@@ -299,6 +298,18 @@ def encode_nucleotides(sequence):
     """
     # Handle case where base is not in the lookup table
     return [nucleotide_to_index.get(nuc, 15) for nuc in sequence]
+
+
+def get_reverse_complement(sequence):
+    """
+    Get the reverse complement of a nucleotide sequence.
+
+    :param sequence:
+        A string representing the nucleotide sequence.
+    :returns:
+        The reverse complement of the input sequence.
+    """
+    return ''.join(reverse_complement[nuc] for nuc in sequence)
 
 
 class CustomBatch:
@@ -324,12 +335,6 @@ class CustomBatch:
 def collate_fn(batch):
     """
     Collate function to process and batch the data samples.
-
-    :param batch:
-        A list of dictionaries where each dictionary represents a data sample.
-    :returns:
-        A dictionary of batched tensors, or None if the batch is empty after
-        filtering.
     """
     # Filter out None samples
     batch = [x for x in batch if x is not None]
@@ -350,13 +355,11 @@ def collate_fn(batch):
                 encoded_sequences, dtype=torch.int32
             )
         else:
-            # Assume other keys are already appropriate for conversion to tensor
-            batched_data[key] = torch.tensor(
-                [b[key] for b in batch],
-                dtype=torch.float32 if isinstance(batch[0][key][0], float)
-                else torch.int32
-            )
-
+            # Assume other keys are appropriate for conversion to tensor
+            sequence = [b[key] for b in batch]
+            dtype = torch.int32 if isinstance(sequence[0][0], int) else torch.float32
+            batched_data[key] = torch.tensor(sequence, dtype=dtype)
     batch = CustomBatch(batched_data)
 
     return batch
+

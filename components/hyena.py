@@ -174,7 +174,7 @@ class FeedForward(Module):
         return x
 
 
-def sinusoidal_positional_encoding(positions, emb_dim, max_seq_length=512):
+def sinusoidal_positional_encoding(positions, emb_dim, max_seq_length=100):
     """
     Create sinusoidal positional encodings from a tensor of positions.
 
@@ -217,7 +217,7 @@ class HyenaFilter(Module):
     """
 
     def __init__(
-            self, emb_dim, n_order, num_heads, max_seq_length=513,
+            self, emb_dim, n_order, num_heads, max_seq_length=100,
             bias=1e-9
     ):
         super(HyenaFilter, self).__init__()
@@ -226,7 +226,8 @@ class HyenaFilter(Module):
         self.num_heads = num_heads
         self.head_dim = emb_dim // num_heads
         self.max_seq_length = max_seq_length
-        self.midpoint = max_seq_length // 2
+        self.window_size = 2 * max_seq_length + 1
+        self.midpoint = self.window_size // 2
         self.ffn = FeedForward(
             self.emb_dim,
             out_dim=self.emb_dim * self.n_order // self.head_dim,
@@ -245,7 +246,7 @@ class HyenaFilter(Module):
         self.alpha = nn.Parameter(torch.randn(n_order, num_heads, 1, 1))
         self.register_buffer(
             'positions',
-            torch.arange(max_seq_length).float().view(1, 1, 1, -1)
+            torch.arange(2 * max_seq_length + 1).float().view(1, 1, 1, -1)
         )
         self.register_buffer(
             'centre_mask',

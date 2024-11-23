@@ -2,7 +2,7 @@ import torch
 from torch.utils.data import DataLoader
 import argparse
 import os
-from components.data_streaming import create_data_loader
+from components.pretrain_data_streaming import create_data_loader
 from components.utils import apply_masking_with_consistent_replacements
 
 
@@ -81,8 +81,9 @@ def main():
     validation_nucleotide_sequences = validation_batch['nucleotide_sequences']
     validation_base_qualities = validation_batch['base_qualities']
     validation_cigar_encodings = validation_batch['cigar_encoding']
-    validation_sequenced_from = validation_batch['sequenced_from']
-    validation_read_reversed = validation_batch['reversed']
+    validation_is_first = validation_batch['is_first']
+    validation_mapped_to_reverse = validation_batch['mapped_to_reverse']
+
 
     # Apply masking to the validation batch
     (
@@ -106,11 +107,10 @@ def main():
     val_masked_base_qualities[val_replaced_indices] = torch.randint(
         0, 45, (num_replaced,), dtype=torch.int32
     )
-    val_masked_sequence_from = validation_sequenced_from.clone()
-    val_masked_sequence_from[val_masked_indices] = -1
-    val_masked_read_reversed = validation_read_reversed.clone()
-    val_masked_read_reversed[val_masked_indices] = -1
-
+    val_masked_is_first = validation_is_first.clone()
+    val_masked_is_first[val_masked_indices] = -1
+    val_masked_mapped_to_reverse = validation_mapped_to_reverse.clone()
+    val_masked_mapped_to_reverse[val_masked_indices] = -1
 
     # Prepare tensors to save
     tensors_to_save = {
@@ -119,8 +119,8 @@ def main():
         'masked_sequences': val_masked_sequences,
         'masked_cigar_encodings': val_masked_cigar_encodings,
         'masked_base_qualities': val_masked_base_qualities,
-        'masked_sequenced_from': val_masked_sequence_from,
-        'masked_read_reversed': val_masked_read_reversed,
+        'masked_is_first': val_masked_is_first,
+        'masked_mapped_to_reverse': val_masked_mapped_to_reverse,
         'masked_indices': val_masked_indices,
         'replaced_indices': val_replaced_indices,
         # Ground truth

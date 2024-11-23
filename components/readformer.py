@@ -18,8 +18,8 @@ from components.rms_norm import RMSNorm
 
 
 # TODO: Create some sort of scaling vector system for rapid fine-tuning. Perhaps
-# allow full finetuning for the Hyena-based components and partial finetuning
-# for the self-attention components and feedforward.
+#  allow full finetuning for the Hyena-based components and partial finetuning
+#  for the self-attention components and feedforward.
 
 def adjust_positions(positions):
     dtype = positions.dtype
@@ -36,6 +36,9 @@ def adjust_positions(positions):
     return adjusted_positions.to(dtype)
 
 
+# TODO: Insertions have a position of -1, which breaks this function. Perhaps,
+#  we can remove this function as we are only looking at individual reads,
+#  rather than multiple.
 def split_into_reads(embeddings, positions):
     batch_size, seq_length, emb_dim = embeddings.shape
     # Calculate position differences to determine the boundaries of segments
@@ -104,6 +107,8 @@ def reassemble_sequences(original_shape, read_tensor, positions, segment_starts,
     return output
 
 
+# TODO: Refactor this out as the model will not require this function. See the
+#  other TODOs for more information.
 def reshape_by_position_and_track(inputs, positions):
     batch_size, seq_length, emb_dim = inputs.shape
     max_embeddings_count = 0
@@ -156,21 +161,23 @@ class RotaryHyenaFilter(Module):
         The number of long convolution filters to generate.
     """
 
-    def __init__(self, emb_dim, n_order, num_heads=4):
+    def __init__(self, emb_dim, n_order, max_sequence_length=100, num_heads=4):
         super(RotaryHyenaFilter, self).__init__()
         self.emb_dim = emb_dim
         self.num_heads = num_heads
+        self.max_sequence_length = max_sequence_length
         self.filter_generator = HyenaFilter(
             emb_dim, n_order, num_heads
         )
-        self.positions = torch.arange(0, 513).to(torch.float32)
+        self.positions = torch.arange(
+            0, 2 * max_sequence_length + 1).to(torch.float32)
         # self.theta_vector = compute_theta_vector(emb_dim)
 
         self.t = nn.Parameter(
-            sinusoidal_positional_encoding(self.positions, self.emb_dim),
+            sinusoidal_positional_encoding(
+                self.positions, self.emb_dim, max_sequence_length),
             requires_grad=False
         )
-
 
     def forward(self):
         """
@@ -202,14 +209,16 @@ class ReadwiseHyena(Module):
 
     def __init__(
             self, emb_dim, n_order, kernel_size, num_heads=4, nonlinearity=None,
-            filter_length=513
+            max_sequence_length=100
     ):
         super(ReadwiseHyena, self).__init__()
         self.n_order = n_order
         self.num_heads = num_heads
         self.head_dim = emb_dim // num_heads
-        self.projection = HyenaProjection(emb_dim, n_order, kernel_size, num_heads)
-        self.filter = RotaryHyenaFilter(emb_dim, n_order, num_heads)
+        self.projection = HyenaProjection(
+            emb_dim, n_order, kernel_size, num_heads)
+        self.filter = RotaryHyenaFilter(
+            emb_dim, n_order, max_sequence_length, num_heads)
         self.fft_long_conv = FFTLongConv()
         self.output_projection = nn.Parameter(
             nn.init.kaiming_uniform_(torch.randn(emb_dim, emb_dim))
@@ -251,14 +260,15 @@ class ReadwiseHyena(Module):
         """
 
         original_shape = embeddings.shape
-        if original_shape[1] > 256:
-            # Split the input embeddings into reads
-            (
-                read_embeddings, read_positions, start_indices, batch_indices
-            ) = split_into_reads(embeddings, positions)
-        else:
-            read_embeddings = embeddings
-            read_positions = positions
+        # if original_shape[1] > 256:
+        #     # Split the input embeddings into reads
+        #     (
+        #         read_embeddings, read_positions, start_indices, batch_indices
+        #     ) = split_into_reads(embeddings, positions)
+        # else:
+        #     read_embeddings = embeddings
+        #     read_positions = positions
+        read_embeddings, read_positions = embeddings, positions
 
         *x, v = self.projection(read_embeddings, read_positions)
         # Initial residual connection
@@ -286,42 +296,42 @@ class ReadwiseHyena(Module):
 
         hyena_out = v.matmul(self.output_projection) + self.output_bias
 
-        if original_shape[1] > 256:
-            hyena_out = reassemble_sequences(
-                original_shape, hyena_out, read_positions, start_indices,
-                batch_indices
-            )
+        # if original_shape[1] > 256:
+        #     hyena_out = reassemble_sequences(
+        #         original_shape, hyena_out, read_positions, start_indices,
+        #         batch_indices
+        #     )
 
         return hyena_out
 
 
-class PositionwiseSelfAttention(Module):
-
-    def __init__(self, emb_dim, num_heads):
-        super(PositionwiseSelfAttention, self).__init__()
-        self.self_attention = MultiHeadSelfAttention(emb_dim, num_heads)
-        self.W0 = nn.Parameter(
-            nn.init.kaiming_uniform_(torch.randn(emb_dim, emb_dim))
-        )
-
-    def forward(self, embeddings, positions):
-        embs_by_position, index_map = reshape_by_position_and_track(
-            embeddings, positions
-        )
-
-        self_attention_out = self.self_attention(embs_by_position)
-        self_attention_out = self_attention_out.matmul(self.W0)
-
-        # Reshape the self-attention output to the original shape using the
-        # position_index_map
-        output = torch.zeros(embeddings.shape, device=embeddings.device)
-
-        for key, index in index_map.items():
-            old_row, old_idx = key
-            new_row, new_idx = index
-            output[old_row, old_idx] = self_attention_out[new_row, new_idx]
-
-        return output
+# class PositionwiseSelfAttention(Module):
+#
+#     def __init__(self, emb_dim, num_heads):
+#         super(PositionwiseSelfAttention, self).__init__()
+#         self.self_attention = MultiHeadSelfAttention(emb_dim, num_heads)
+#         self.W0 = nn.Parameter(
+#             nn.init.kaiming_uniform_(torch.randn(emb_dim, emb_dim))
+#         )
+#
+#     def forward(self, embeddings, positions):
+#         embs_by_position, index_map = reshape_by_position_and_track(
+#             embeddings, positions
+#         )
+#
+#         self_attention_out = self.self_attention(embs_by_position)
+#         self_attention_out = self_attention_out.matmul(self.W0)
+#
+#         # Reshape the self-attention output to the original shape using the
+#         # position_index_map
+#         output = torch.zeros(embeddings.shape, device=embeddings.device)
+#
+#         for key, index in index_map.items():
+#             old_row, old_idx = key
+#             new_row, new_idx = index
+#             output[old_row, old_idx] = self_attention_out[new_row, new_idx]
+#
+#         return output
 
 
 class ReadformerBlock(Module):
@@ -356,16 +366,16 @@ class ReadformerBlock(Module):
         )
 
         # Position-wise self-attention layer remains the same
-        self.layer_norm_4 = RMSNorm(emb_dim)
-        self.pos_self_attention = PositionwiseSelfAttention(emb_dim, num_heads)
-        self.layer_norm_5 = RMSNorm(emb_dim)
-        self.gate_projection_2 = nn.Linear(emb_dim, emb_dim)
-        self.feature_projection_2 = nn.Linear(emb_dim, emb_dim)
+        # self.layer_norm_4 = RMSNorm(emb_dim)
+        # self.pos_self_attention = PositionwiseSelfAttention(emb_dim, num_heads)
+        # self.layer_norm_5 = RMSNorm(emb_dim)
+        # self.gate_projection_2 = nn.Linear(emb_dim, emb_dim)
+        # self.feature_projection_2 = nn.Linear(emb_dim, emb_dim)
         self.dropout = nn.Dropout(dropout)
         self.num_hyena = num_hyena
         self.num_attention = num_attention
-
-        self.use_positionwise_self_attention = True
+        #
+        # self.use_positionwise_self_attention = True
 
     def forward(self, embeddings, positions):
         hyena_out = embeddings
@@ -383,7 +393,7 @@ class ReadformerBlock(Module):
             for i in range(self.num_attention):
                 attention_input = self.layer_norms_attention[i](attention_out)
                 attention_out = self.dropout(
-                    self.read_self_attentions[i](attention_input, positions)
+                    self.read_self_attentions[i](attention_input)
                 ) + attention_out
 
                 gate = torch.sigmoid(
@@ -392,27 +402,31 @@ class ReadformerBlock(Module):
                     self.feature_projections_attention[i](attention_input))
                 attention_out = self.dropout(gate * swish_output) + attention_out
 
-        if self.use_positionwise_self_attention:
-            # Apply position-wise self-attention
-            pos_attention_input = self.layer_norm_4(attention_out)
-            pos_attention_out = self.dropout(
-                self.pos_self_attention(pos_attention_input, positions)
-            ) + attention_out
+        # if self.use_positionwise_self_attention:
+        #     # Apply position-wise self-attention
+        #     pos_attention_input = self.layer_norm_4(attention_out)
+        #     pos_attention_out = self.dropout(
+        #         self.pos_self_attention(pos_attention_input, positions)
+        #     ) + attention_out
+        #
+        #     # Apply second feed-forward layer
+        #     ffn_2_input = self.layer_norm_5(pos_attention_out)
+        #     gate_2 = torch.sigmoid(self.gate_projection_2(ffn_2_input))
+        #     swish_output_2 = F.silu(self.feature_projection_2(ffn_2_input))
+        #     output = self.dropout(gate_2 * swish_output_2) + pos_attention_out
+        # else:
+        #     output = attention_out
 
-            # Apply second feed-forward layer
-            ffn_2_input = self.layer_norm_5(pos_attention_out)
-            gate_2 = torch.sigmoid(self.gate_projection_2(ffn_2_input))
-            swish_output_2 = F.silu(self.feature_projection_2(ffn_2_input))
-            output = self.dropout(gate_2 * swish_output_2) + pos_attention_out
-        else:
-            output = attention_out
+        output = attention_out
 
         return output
 
-    def set_use_positionwise_self_attention(self, use_positionwise_self_attention):
-        self.use_positionwise_self_attention = use_positionwise_self_attention
+    # def set_use_positionwise_self_attention(self, use_positionwise_self_attention):
+    #     self.use_positionwise_self_attention = use_positionwise_self_attention
 
-    def set_freeze_state(self, freeze_hyena_layers=None, freeze_attention_layers=None):
+    def set_freeze_state(
+            self, freeze_hyena_layers=None, freeze_attention_layers=None
+    ):
         """
         Freeze or unfreeze layers selectively.
 

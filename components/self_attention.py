@@ -185,8 +185,12 @@ class RoPEMultiHeadSelfAttention(Module):
         self.value_scale.requires_grad = True
         self.out_scale.requires_grad = True
 
-    def forward(self, x, positions):
+    def forward(self, x):
         batch_size, seq_length, emb_dim = x.size()
+
+        # Create positions 0 to seq_length for each sequence in the batch
+        positions = torch.arange(seq_length, device=x.device).repeat(batch_size, 1)
+
         # Linear projections
         Q = self.query(x) * self.query_scale
         K = self.key(x) * self.key_scale

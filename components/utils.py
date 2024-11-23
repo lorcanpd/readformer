@@ -228,8 +228,8 @@ def load_validation_tensors(validation_dir):
     tensor_names = [
         'positions', 'valid_positions',
         'masked_sequences', 'masked_cigar_encodings',
-        'masked_base_qualities', 'masked_sequenced_from',
-        'masked_read_reversed', 'masked_indices', 'replaced_indices',
+        'masked_base_qualities', 'masked_is_first', 'masked_mapped_to_reverse',
+        'masked_indices', 'replaced_indices',
         'nucleotide_sequences', 'base_qualities'
     ]
 

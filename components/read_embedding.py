@@ -146,46 +146,17 @@ class BaseQualityEmbeddingLayer(Module):
         return embeddings
 
 
-class SequencingDirectionEmbeddingLayer(Module):
+class StrandEmbeddingLayer(Module):
     def __init__(self, embedding_dim):
         """
-        Initialises the sequencing direction embedding layer.
+        Initialises the reverse complement embedding layer. This layer is used
+        to indicate whether a read was originally mapped to the reverse strand
+        and then reverse complemented.
 
         :param embedding_dim:
             The dimensionality of the embedding space.
         """
-        super(SequencingDirectionEmbeddingLayer, self).__init__()
-        num_directions = 2
-        self.embedding = nn.Embedding(
-            num_embeddings=num_directions,
-            embedding_dim=embedding_dim,
-            padding_idx=-1
-        )
-
-    def forward(self, inputs):
-        """
-        Maps the input sequencing directions to their embeddings.
-
-        :param inputs:
-            A batch of sequences as torch tensors with sequencing direction indices.
-        :return:
-            The corresponding sequencing direction embeddings.
-        """
-        embeddings = self.embedding(inputs)
-        return embeddings
-
-
-class ReadReversalEmbeddingLayer(Module):
-    def __init__(self, embedding_dim):
-        """
-        Initialises the read reversal embedding layer. Which indicates whether
-        the read has been reversed so that the 5' end is at the start of the
-        read.
-
-        :param embedding_dim:
-            The dimensionality of the embedding space.
-        """
-        super(ReadReversalEmbeddingLayer, self).__init__()
+        super(StrandEmbeddingLayer, self).__init__()
         num_reversals = 2
         self.embedding = nn.Embedding(
             num_embeddings=num_reversals,
@@ -195,7 +166,7 @@ class ReadReversalEmbeddingLayer(Module):
 
     def forward(self, inputs):
         """
-        Maps the input read reversals to their embeddings.
+        Maps the input flag to their embeddings.
 
         :param inputs:
             A batch of sequences as torch tensors with read reversal indices.
@@ -204,3 +175,34 @@ class ReadReversalEmbeddingLayer(Module):
         """
         embeddings = self.embedding(inputs)
         return embeddings
+
+
+class MatePairEmbeddingLayer(Module):
+    def __init__(self, embedding_dim):
+        """
+        Initialises the mate pair embedding layer. This layer is used to indicate
+        whether a read is the first or second read of the pair.
+
+        :param embedding_dim:
+            The dimensionality of the embedding space.
+        """
+        super(MatePairEmbeddingLayer, self).__init__()
+        num_mate_pairs = 2
+        self.embedding = nn.Embedding(
+            num_embeddings=num_mate_pairs,
+            embedding_dim=embedding_dim,
+            padding_idx=-1
+        )
+
+    def forward(self, inputs):
+        """
+        Maps the input flag to their embeddings.
+
+        :param inputs:
+            A batch of sequences as torch tensors with mate pair indices.
+        :return:
+            The corresponding mate pair embeddings.
+        """
+        embeddings = self.embedding(inputs)
+        return embeddings
+

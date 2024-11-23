@@ -13,21 +13,7 @@ def extract_random_read_from_position(
 ) -> dict[Any, dict[str, Any]] | None:
     """
     Extract a random read from a BAM file starting at a given position.
-
-    :param bam_file_path:
-        Path to the BAM file.
-    :param chromosome:
-        Chromosome name.
-    :param position:
-        Starting genomic position (0-based).
-    :param min_quality:
-        Minimum mapping quality threshold.
-
-    :return:
-        A dictionary containing information about the randomly selected read.
-        Returns None if no read meets the criteria.
     """
-
     bam_file = pysam.AlignmentFile(bam_file_path, "rb")
 
     # Adjust chromosome name if necessary
@@ -53,22 +39,17 @@ def extract_random_read_from_position(
 
     selected_read = None
     count = 0
-    max_reads = 40  # Maximum number of reads to consider for randomness
-    n = np.random.randint(0, max_reads + 1)  # Random integer between 0 and 40 inclusive
+    max_reads = 40  # Maximum number of reads to consider
 
     for read in iter_reads:
         if read.mapping_quality < min_quality:
             continue
 
-        if count == n:
-            selected_read = read
+        if count >= max_reads:
             break
 
         selected_read = read
         count += 1
-
-        if count >= max_reads:
-            break
 
     bam_file.close()
 
@@ -84,7 +65,8 @@ def extract_random_read_from_position(
             "template_length": selected_read.template_length,
             "query_sequence": selected_read.query_sequence,
             "query_qualities": selected_read.query_qualities,
-            "tags": selected_read.tags
+            "tags": selected_read.tags,
+            "positions": selected_read.get_reference_positions(full_length=True)
         }
     }
 
@@ -94,11 +76,11 @@ def decode_orientation_flags(flags):
     Extract essential flags related to read orientation.
     """
     orientation_info = {
-        # 'is_paired': (flags >> 0) & 1,             # 0x1
-        'proper_pair': (flags >> 1) & 1,           # 0x2
-        'is_reverse': (flags >> 4) & 1,            # 0x10
-        'is_first_in_pair': (flags >> 6) & 1,      # 0x40
-        'is_second_in_pair': (flags >> 7) & 1      # 0x80
+        'is_paired': (flags & 0x1) != 0,
+        'proper_pair': (flags & 0x2) != 0,
+        'is_reverse': (flags & 0x10) != 0,
+        'is_first_in_pair': (flags & 0x40) != 0,
+        'is_second_in_pair': (flags & 0x80) != 0
     }
     return orientation_info
 
@@ -210,30 +192,92 @@ def get_read_info(read_dict):
     """
     Extracts information from the read dictionary and returns a new dictionary
     containing only the necessary information for the model.
-
-    :param read_dict:
-        A dictionary containing read information.
-    :return final_dict:
-        A dictionary containing only the necessary information for the model.
     """
     final_dict = {}
-    for read, values in read_dict.items():
+    for read_name, values in read_dict.items():
+        # Decode orientation flags
+        orientation_flags = decode_orientation_flags(values['bitwise_flags'])
 
-        final_dict[read] = {
+        # Extract reference positions
+        positions = values['positions']
+        # If None value in positions, replace with -1 (these are insertions)
+        positions = [-1 if pos is None else pos for pos in positions]
+
+        final_dict[read_name] = {
             'query_sequence': values['query_sequence'],
             'base_qualities': values['query_qualities'],
-            'orientation_flags': decode_orientation_flags(
-                values['bitwise_flags']
-            ),
+            'orientation_flags': orientation_flags,
             'cigar_encoding': cigar_to_integer_encoding(
                 values['cigar'], len(values['query_sequence'])
             ),
-            'positions': list(
-                range(
-                    values['reference_start'],
-                    values['reference_start'] + len(values['query_sequence'])
-                )
-            )
+            'positions': positions
         }
 
     return final_dict
+
+
+def extract_read_by_id(
+        bam_file_path: str,
+        chromosome: str,
+        position: int,
+        read_id: str
+) -> Dict[str, Any] | None:
+    """
+    Extract a specific read from a BAM file given its ID and genomic
+    coordinates. Take advantage of the fact that BAM files are indexed by
+    genomic coordinates, rather than read IDs.
+
+    :param bam_file_path:
+        Path to the BAM file.
+    :param chromosome:
+        Chromosome name.
+    :param position:
+        Genomic position (0-based).
+    :param read_id:
+        ID of the read to retrieve.
+
+    :return:
+        A dictionary containing information about the read.
+        Returns None if no read matches the criteria.
+    """
+
+    bam_file = pysam.AlignmentFile(bam_file_path, "rb")
+
+    # Adjust chromosome name if necessary
+    adjusted_chromosome = chromosome
+    if chromosome not in bam_file.references:
+        if chromosome.startswith("chr"):
+            adjusted_chromosome = chromosome[3:]  # Try without 'chr'
+        else:
+            adjusted_chromosome = "chr" + chromosome  # Try with 'chr'
+        if adjusted_chromosome not in bam_file.references:
+            bam_file.close()
+            raise ValueError(
+                f"Chromosome {adjusted_chromosome} not found in the BAM file."
+            )
+
+    try:
+        iter_reads = bam_file.fetch(adjusted_chromosome, position, position + 1)
+    except ValueError as e:
+        bam_file.close()
+        raise ValueError(
+            f"Error fetching reads from {adjusted_chromosome}:{position} - {e}"
+        )
+
+    for read in iter_reads:
+        if read.query_name == read_id:
+            bam_file.close()
+            return {
+                "query_name": read.query_name,
+                "bitwise_flags": read.flag,
+                "reference_start": read.reference_start,
+                "mapping_quality": read.mapping_quality,
+                "cigar": read.cigarstring,
+                "template_length": read.template_length,
+                "query_sequence": read.query_sequence,
+                "query_qualities": read.query_qualities,
+                "tags": read.tags
+            }
+
+    bam_file.close()
+    return None
