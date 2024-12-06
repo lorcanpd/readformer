@@ -53,6 +53,12 @@ def parse_arguments():
         required=True,
         help='Path to directory where temporary files should be created.'
     )
+    # flag to indicate whether to use 0 or 1 based coordinates.
+    parser.add_argument(
+        '--one_based', action='store_true',
+        help='Flag to indicate that the input mutation coordinates are 1-based.'
+    )
+
     args = parser.parse_args()
     return args
 
@@ -150,7 +156,7 @@ def classify_mutation(left_context, right_context, ref_base, alt_base):
 def process_sample(args_tuple):
     (
         sample_id, sample_mutations, bam_path, reference_fasta, temp_dir,
-        chrom_prefix, fasta_prefix, min_mapping_quality
+        chrom_prefix, fasta_prefix, min_mapping_quality, one_based
     ) = args_tuple
 
     sample_mutations = sample_mutations.sort_values(['Chr', 'Pos'])
@@ -190,7 +196,11 @@ def process_sample(args_tuple):
 
     for idx, mutation in sample_mutations.iterrows():
         chrom = str(mutation['Chr'])
-        pos = int(mutation['Pos']) - 1  # Convert to 0-based
+        # if the positions are 1-based, convert to 0-based
+        if one_based:
+            pos = int(mutation['Pos']) - 1  # Convert to 0-based
+        else:
+            pos = int(mutation['Pos'])
         ref = mutation['Ref']
         alt = mutation['Alt']
 
@@ -213,14 +223,32 @@ def process_sample(args_tuple):
                 continue
             if read.mapping_quality < min_mapping_quality:
                 continue
-            # Get read base at position
-            read_pos = read.get_reference_positions(full_length=False)
-            if pos in read_pos:
-                idx_in_read = read_pos.index(pos)
-                base = read.query_sequence[idx_in_read]
-                if base.upper() == alt.upper():
-                    supporting_reads.append(read)
-                    supporting_read_ids.append(read.query_name)
+            # # Get read base at position
+            # read_pos = read.get_reference_positions(full_length=True)
+            # if pos in read_pos:
+            #     idx_in_read = read_pos.index(pos)
+            #     base = read.query_sequence[idx_in_read]
+            #     if base.upper() == alt.upper():
+            #         supporting_reads.append(read)
+            #         supporting_read_ids.append(read.query_name)
+            aligned_pairs = read.get_aligned_pairs(matches_only=False)
+            base_in_read = None
+
+            for query_pos, ref_pos in aligned_pairs:
+                if ref_pos == pos:
+                    if query_pos is not None:
+                        base_in_read = read.query_sequence[query_pos]
+                        baseq = read.query_qualities[query_pos] \
+                            if read.query_qualities else None
+                        if baseq is None or baseq < 20:
+                            continue
+                        if base_in_read.upper() == alt.upper():
+                            supporting_reads.append(read)
+                            supporting_read_ids.append(read.query_name)
+                    else:
+                        # Deletion at this position in the read
+                        pass  # Handle deletions if necessary
+                    break  # Found the position, no need to continue
 
         if len(supporting_reads) < 2:
             continue
@@ -235,6 +263,10 @@ def process_sample(args_tuple):
                 f"sample {sample_id}.")
             continue
         left_base, ref_base_context, right_base = context_seq[0], context_seq[1], context_seq[2]
+
+        # check that the reference base matches the base in the reference genome
+        if ref.upper() != ref_base_context.upper():
+            continue
 
         # Classify the mutation
         trinuc_context = classify_mutation(
@@ -574,7 +606,8 @@ def main():
             temp_dir,
             chrom_prefix,
             fasta_prefix,
-            args.min_mapping_quality
+            args.min_mapping_quality,
+            args.one_based
         ))
 
     # Process samples in parallel

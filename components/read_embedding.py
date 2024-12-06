@@ -104,13 +104,15 @@ class CigarEmbeddingLayer(Module):
             The dimensionality of the embedding space.
         """
         super(CigarEmbeddingLayer, self).__init__()
-        # There are 9 cigar operations, including -1 for padding
+        # There are 5 cigar ops that consume a reference base + masking index
+        # makes 6
         num_cigar_ops = 5
         self.embedding = nn.Embedding(
-            num_embeddings=num_cigar_ops,
+            num_embeddings=num_cigar_ops + 1,
             embedding_dim=embedding_dim,
             padding_idx=-1,
         )
+        self.mask_index = num_cigar_ops
 
     def forward(self, inputs):
         """
@@ -133,15 +135,19 @@ class BaseQualityEmbeddingLayer(Module):
         The dimensionality of the embedding space.
 
     """
-    def __init__(self, embedding_dim):
+    def __init__(self, embedding_dim, max_quality=40):
         super(BaseQualityEmbeddingLayer, self).__init__()
+        index_of_highest_quality = max_quality + 1
         self.embedding = nn.Embedding(
-            num_embeddings=45,
+            num_embeddings=index_of_highest_quality + 1,
             embedding_dim=embedding_dim,
             padding_idx=-1
         )
+        self.mask_index = index_of_highest_quality + 1
+        self.max_quality = max_quality
 
     def forward(self, inputs):
+        inputs = inputs.clamp(min=0, max=self.max_quality)
         embeddings = self.embedding(inputs)
         return embeddings
 
@@ -159,10 +165,11 @@ class StrandEmbeddingLayer(Module):
         super(StrandEmbeddingLayer, self).__init__()
         num_reversals = 2
         self.embedding = nn.Embedding(
-            num_embeddings=num_reversals,
+            num_embeddings=num_reversals+1,
             embedding_dim=embedding_dim,
             padding_idx=-1
         )
+        self.mask_index = num_reversals
 
     def forward(self, inputs):
         """
@@ -189,10 +196,11 @@ class MatePairEmbeddingLayer(Module):
         super(MatePairEmbeddingLayer, self).__init__()
         num_mate_pairs = 2
         self.embedding = nn.Embedding(
-            num_embeddings=num_mate_pairs,
+            num_embeddings=num_mate_pairs+1,
             embedding_dim=embedding_dim,
             padding_idx=-1
         )
+        self.mask_index = num_mate_pairs
 
     def forward(self, inputs):
         """

@@ -251,7 +251,9 @@ def create_data_loader(
     data_loader = DataLoader(
         dataset, batch_size=batch_size, collate_fn=collate_fn, sampler=sampler,
         num_workers=num_workers, prefetch_factor=prefetch_factor,
-        pin_memory=(multiprocessing_context is not None),
+        # This should allow two DataLoader instances to share the same workers.
+        # Useful for having a separate DataLoader for validation data.
+        pin_memory=False,
         worker_init_fn=worker_init_fn,
         multiprocessing_context=multiprocessing_context,
         persistent_workers=(multiprocessing_context is not None)

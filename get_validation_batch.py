@@ -98,19 +98,19 @@ def main():
 
     num_replaced = val_replaced_indices.sum().item()
     val_masked_cigar_encodings = validation_cigar_encodings.clone()
-    val_masked_cigar_encodings[val_masked_indices] = -1
+    val_masked_cigar_encodings[val_masked_indices] = 5
     val_masked_cigar_encodings[val_replaced_indices] = torch.randint(
         0, 4, (num_replaced,), dtype=torch.int32
     )
     val_masked_base_qualities = validation_base_qualities.clone()
-    val_masked_base_qualities[val_masked_indices] = -1
+    val_masked_base_qualities[val_masked_indices] = 42
     val_masked_base_qualities[val_replaced_indices] = torch.randint(
-        0, 45, (num_replaced,), dtype=torch.int32
+        0, 41, (num_replaced,), dtype=torch.int32
     )
     val_masked_is_first = validation_is_first.clone()
-    val_masked_is_first[val_masked_indices] = -1
+    val_masked_is_first[val_masked_indices] = 2
     val_masked_mapped_to_reverse = validation_mapped_to_reverse.clone()
-    val_masked_mapped_to_reverse[val_masked_indices] = -1
+    val_masked_mapped_to_reverse[val_masked_indices] = 2
 
     # Prepare tensors to save
     tensors_to_save = {

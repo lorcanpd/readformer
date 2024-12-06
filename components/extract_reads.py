@@ -216,6 +216,9 @@ def get_read_info(read_dict):
     return final_dict
 
 
+# TODO: Double check that the position information for the reads is correct.
+#  This is important be casue we will be uses the positions to index the read
+#  to index the mdoel outptus for classification.
 def extract_read_by_id(
         bam_file_path: str,
         chromosome: str,
@@ -257,17 +260,18 @@ def extract_read_by_id(
             )
 
     try:
-        iter_reads = bam_file.fetch(adjusted_chromosome, position, position + 1)
+        iter_reads = bam_file.fetch(adjusted_chromosome, position, position+1)
     except ValueError as e:
         bam_file.close()
         raise ValueError(
             f"Error fetching reads from {adjusted_chromosome}:{position} - {e}"
         )
 
+    out_dict = {}
     for read in iter_reads:
         if read.query_name == read_id:
             bam_file.close()
-            return {
+            out_dict[read_id] = {
                 "query_name": read.query_name,
                 "bitwise_flags": read.flag,
                 "reference_start": read.reference_start,
@@ -276,8 +280,9 @@ def extract_read_by_id(
                 "template_length": read.template_length,
                 "query_sequence": read.query_sequence,
                 "query_qualities": read.query_qualities,
-                "tags": read.tags
+                "tags": read.tags,
+                "positions": read.get_reference_positions(full_length=True)
             }
+            break
 
-    bam_file.close()
-    return None
+    return out_dict

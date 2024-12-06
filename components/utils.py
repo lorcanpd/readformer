@@ -246,19 +246,112 @@ def get_effective_number(n_samples):
     Compute the effective number of samples for class balancing.
 
     :param n_samples:
-        The number of samples in the class.
+        A tensor containing the number of samples in each class.
     :return:
-        The effective number of samples.
+        A tensor containing the effective number of samples for each class.
+    """
+    effective_num = torch.ones_like(n_samples, dtype=torch.float32)
+    mask = n_samples > 1
+    beta = (n_samples[mask] - 1) / n_samples[mask]
+    numerator = 1 - torch.exp(n_samples[mask] * torch.log(beta))
+    denominator = 1 - beta
+    effective_num[mask] = numerator / denominator
+    return effective_num
+
+
+def get_layerwise_param_groups(model, max_lr, min_lr):
+    """
+    Assigns layer-wise learning rates across all layers (both self-attention and hyena)
+    in a continuous geometric progression from max_lr (top-most layer of the top-most block)
+    to min_lr (bottom-most layer of the bottom-most block).
+
+    The scaling is applied layer-by-layer as if blocks did not exist. Within each block,
+    self-attention layers (including their norms and projections) come first, top to bottom,
+    followed by hyena layers (including their norms).
+
+    :param model:
+        The instance of the Model containing ReadformerBlocks.
+    :param max_lr:
+        The maximum learning rate to assign to the top-most layer.
+    :param min_lr:
+        The minimum learning rate to assign to the bottom-most layer.
+
+    :return:
+        A list of parameter groups (dicts) suitable for passing to the optimizer.
     """
 
-    if n_samples == 1:
-        return 1.0
+    # Step 1: Flatten all layers into a single list
+    # We'll collect them as tuples of modules that form one "layer".
+    # Order:
+    #   Start from top-most block (last in model.layers),
+    #   go through all self-attention layers (and associated modules),
+    #   then all hyena layers (and associated modules).
+    # Then move to the next block down, repeat, until the bottom-most block.
 
-    beta = (n_samples - 1) / n_samples
+    all_layers = []
+    # Reverse iteration: top-most block is model.layers[-1]
+    for block in reversed(model.layers):
+        num_attention = len(block.read_self_attentions)
+        num_hyena = len(block.hyenas)
 
-    numerator = 1 - np.exp(n_samples * np.log(beta))
-    denominator = 1 - beta
+        # Self-attention layers
+        # Each "layer" here includes:
+        # - read_self_attentions[i]
+        # - layer_norms_attention[i]
+        # - gate_projections_attention[i]
+        # - feature_projections_attention[i]
+        # - silus[i]
+        for i in range(num_attention):
+            layer_modules = [
+                block.read_self_attentions[i],
+                block.layer_norms_attention[i],
+                block.gate_projections_attention[i],
+                block.feature_projections_attention[i],
+                block.silus[i]
+            ]
+            all_layers.append(layer_modules)
 
-    effective_num = numerator / denominator
+        # Hyena layers
+        # Each "layer" here includes:
+        # - hyenas[i]
+        # - layer_norms_hyena[i]
+        for i in range(num_hyena):
+            layer_modules = [
+                block.hyenas[i],
+                block.layer_norms_hyena[i]
+            ]
+            all_layers.append(layer_modules)
 
-    return effective_num
+    # Now we have a flat list `all_layers` where `all_layers[0]` is the
+    # top-most layer of the top-most block, and `all_layers[-1]` is the
+    # bottom-most layer of the bottom-most block.
+
+    # Step 2: Compute the geometric spacing for the LRs across all layers
+    total_layers = len(all_layers)
+    if total_layers <= 1:
+        # If there's only one layer total, just use max_lr for it.
+        scale = 1.0
+    else:
+        # scale^(total_layers-1) = min_lr / max_lr
+        scale = (min_lr / max_lr) ** (1.0 / (total_layers - 1))
+
+    # Step 3: Assign learning rates and create param groups
+    param_groups = []
+    for layer_idx, layer_modules in enumerate(all_layers):
+        # current_lr = max_lr * scale^(layer_idx)
+        current_lr = max_lr * (scale ** layer_idx)
+
+        # Collect all parameters for this layer
+        layer_params = []
+        for mod in layer_modules:
+            layer_params += list(mod.parameters())
+
+        # Create a parameter group for this layer
+        param_groups.append({
+            "params": layer_params,
+            "lr": current_lr
+        })
+
+    return param_groups
+
+

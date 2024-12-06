@@ -12,9 +12,9 @@ SIF="/nfs/users/nfs_l/lp23/sifs/readformer.sif"
 DATA_DIR="/lustre/scratch126/casm/team274sb/lp23/readformer/data/pretrain_bams"
 METADATA_PATH="/lustre/scratch126/casm/team274sb/lp23/readformer/data/pretrain_subsample_metadata.csv"
 MODEL_DIR="/lustre/scratch126/casm/team274sb/lp23/readformer/models/read_only_pretrain"
-VAL_BATCH_DIR="/lustre/scratch126/casm/team274sb/lp23/readformer/data/validation_batch_128"
+VAL_BATCH_DIR="/lustre/scratch126/casm/team274sb/lp23/readformer/data/validation_batch"
 GPU_MEMORY=80000
-MEMORY=32768
+MEMORY=8192
 MAX_ITERS=500000
 CORES=12
 #NUM_HYENA=3
@@ -25,14 +25,14 @@ KERNEL_SIZE=7
 MIN_READ_QUALITY=20
 BATCH_SIZE=128
 #EMB_DIM=64
-MAX_SEQUENCE_LENGTH=160  # Single reads
+MAX_SEQUENCE_LENGTH=100  # Single reads
 WARM_UP_EPOCHS=2
 #EPOCHS_AT_INTERVAL=1
 ITERS_IN_EPOCH=10000
 CORRUPTION_RATE=0.15
 PROPORTION_RANDOM=0.1
 MIXING_ALPHA=0.2
-MAIN_LR=0.0025
+MAIN_LR=3e-4
 # First runs  batch size 1024 - 32 sets of 32 reads
 # Outer loop params.
 #EMB_DIMS=( 128 256 )
@@ -78,9 +78,9 @@ NAME="final_pretrain"
 
 EMB_DIMS=( 512 256 ) #512 )
 HEAD_NUMS=( 32  16 ) # 32 )
-LAYER_NUMS=( 4   1 ) #  1 )
+LAYER_NUMS=( 4   4 ) #  1 )
 NUM_HYENAS=( 5   0 ) # 24 )
-NUM_ATTENS=( 1  24 ) #  0 )
+NUM_ATTENS=( 1  6 ) #  0 )
 
 
 for i in "${!EMB_DIMS[@]}"; do

@@ -364,6 +364,9 @@ class ReadformerBlock(Module):
         self.feature_projections_attention = nn.ModuleList(
             [nn.Linear(emb_dim, emb_dim) for _ in range(num_attention)]
         )
+        self.silus = nn.ModuleList(
+            [nn.SiLU() for _ in range(num_attention)]
+        )
 
         # Position-wise self-attention layer remains the same
         # self.layer_norm_4 = RMSNorm(emb_dim)
@@ -398,7 +401,7 @@ class ReadformerBlock(Module):
 
                 gate = torch.sigmoid(
                     self.gate_projections_attention[i](attention_input))
-                swish_output = F.silu(
+                swish_output = self.silus[i](
                     self.feature_projections_attention[i](attention_input))
                 attention_out = self.dropout(gate * swish_output) + attention_out
 

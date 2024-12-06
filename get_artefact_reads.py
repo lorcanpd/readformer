@@ -607,7 +607,7 @@ def process_chunk(
                                             else:
                                                 # Check position on the read is
                                                 # within 100bp of the 5' end
-                                                if position_on_read > 100:
+                                                if position_on_read >= 100:
                                                     continue
 
                                             majority_base = max(base_counts, key=base_counts.get)
