@@ -803,8 +803,8 @@ def main():
                         # Log the validation metrics
                         logging.info(
                             f"Validation metrics after phase {phase_index} "
-                            f"({phase_index % (args.phases_per_epoch - 1)} of "
-                            f"{args.phases_per_epoch - 1} phases, in epoch {epoch}):"
+                            f"(There are {args.phases_per_epoch} phases per "
+                            f"epoch. This is epoch {epoch}):"
                         )
                         table_data = []
                         for key in validation_metrics.thresholds:
