@@ -9,7 +9,7 @@ import sys
 import logging
 import wandb
 from tabulate import tabulate
-# import numpy as np
+import multiprocessing as mp
 
 # Import the necessary modules from your components
 from components.base_model import Model
@@ -22,10 +22,10 @@ from components.read_embedding import (
 )
 from components.finetune_data_streaming import create_finetuning_dataloader
 from components.classification_head import BetaDistributionClassifier
-from components.utils import get_effective_number
+from components.utils import get_effective_number, get_layerwise_param_groups
 from components.metrics import BetaBernoulliLoss, FineTuningMetrics
 from components.scheduler import CosineAnnealingScheduler
-
+from pretrain_readwise_only import device_context, check_cuda_availability
 
 def get_args():
     parser = argparse.ArgumentParser(
@@ -144,6 +144,14 @@ def get_args():
     parser.add_argument(
         '--debug', action='store_true',
         help='Enable debug logging.'
+    )
+
+    parser.add_argument(
+        '--phases_per_epoch', type=int, default=1,
+        help=(
+            'Number of phases to divide each epoch into. Each phase will have '
+            'its own annealing cycle and validation.'
+        )
     )
 
     args = parser.parse_args()
@@ -289,10 +297,30 @@ def load_latest_checkpoint(args, device):
     )
 
 
+# TODO: implement this in the code below to make ready for the HPC.
 def get_allocated_cpus():
     cpus = int(os.getenv('LSB_DJOB_NUMPROC', '1'))
     logging.info(f"Allocated CPUs: {cpus}")
     return cpus
+
+
+def unfreeze_layers_by_epoch(param_groups, epoch, ignore_groups=[]):
+    """
+    Unfreeze layers progressively based on the epoch number.
+
+    :param param_groups:
+        A list of parameter groups ordered from top-most layer to bottom-most.
+    :param epoch:
+        Current epoch number (1-based). At epoch=1, top-most layer is unfrozen.
+        At epoch=2, top two layers are unfrozen, and so forth.
+    :param ignore_groups:
+        A list of indices of groups to ignore and keep unfrozen.
+    """
+    for i, group in enumerate(param_groups):
+        # Layers with index < epoch are unfrozen, others remain frozen
+        requires_grad = (i < epoch) | (i in ignore_groups)
+        for p in group['params']:
+            p.requires_grad = requires_grad
 
 
 def main():
@@ -328,6 +356,10 @@ def main():
             resume=False
         )
 
+    if not check_cuda_availability() and not torch.backends.mps.is_available():
+        sys.exit(1)
+    else:
+        mp.set_start_method('spawn', force=True)
 
     # Set device
     device = (
@@ -337,69 +369,6 @@ def main():
         )
     )
     logging.info(f"Using device: {device}")
-
-    if not args.load_latest_checkpoint:
-        if args.pre_trained_path:
-            # Load the pre-trained model
-            (
-                nucleotide_embeddings, cigar_embeddings, base_quality_embeddings,
-                strand_embeddings, mate_pair_embeddings,
-                gate_projection, feature_projection, readformer_model
-            ) = load_pretrained_model(args, device)
-        else:
-            (
-                nucleotide_embeddings, cigar_embeddings, base_quality_embeddings,
-                strand_embeddings, mate_pair_embeddings,
-                gate_projection, feature_projection, readformer_model
-            ) = instantiate_model(args, device)
-
-        ref_base_embedding = NucleotideEmbeddingLayer(
-            args.emb_dim, mlm_mode=True
-        ).to(device)
-
-        classifier = BetaDistributionClassifier(
-            input_dim=args.emb_dim,
-            hidden_dim=args.emb_dim // 2
-        ).to(device)
-
-        epoch = 0
-        i = 0
-
-        initial_lr = args.base_lr
-
-        params = (
-                list(nucleotide_embeddings.parameters())
-                + list(cigar_embeddings.parameters())
-                + list(base_quality_embeddings.parameters())
-                + list(strand_embeddings.parameters())
-                + list(mate_pair_embeddings.parameters())
-                + list(gate_projection.parameters())
-                + list(feature_projection.parameters())
-                + list(readformer_model.parameters())
-                + list(ref_base_embedding.parameters())
-                + list(classifier.parameters())
-        )
-
-        optimiser = AdamW(
-            params, lr=initial_lr, eps=1e-9, weight_decay=0.05
-        )
-
-        start_epoch = 0
-    else:
-        (
-            nucleotide_embeddings, cigar_embeddings, base_quality_embeddings,
-            strand_embeddings, mate_pair_embeddings,
-            gate_projection, feature_projection, readformer_model,
-            ref_base_embedding, classifier, optimiser, start_epoch, i
-        ) = load_latest_checkpoint(args, device)
-
-
-    # TODO: make the freezing of weights based upon epoch. For example, freeze
-    #  all pre trained weights for the first epoch, and then for the next epoch
-    #  unfreeze the topmost layer. For the next epoch, unfreeze the top two
-    #  layers, and so on. This will allow the model to learn the new data
-    #  distribution while still retaining the knowledge from the pre-trained
-    #  model.
 
     loss_fn = BetaBernoulliLoss(reduction='mean')
 
@@ -424,8 +393,12 @@ def main():
         batch_size=args.batch_size,
         max_read_length=args.max_read_length,
         shuffle=True,
-        num_workers=args.num_workers,
+        # num_workers=0,
+        num_workers=get_allocated_cpus(),
+        prefetch_factor=2
     )
+    iters_in_epoch = len(dataset)
+    steps_per_phase = iters_in_epoch // args.phases_per_epoch
 
     validation_dataset = create_finetuning_dataloader(
         csv_path=f'{args.finetune_metadata_dir}/test_fold_{args.fold}.csv',
@@ -436,23 +409,149 @@ def main():
         # training epoch multiple times.
         max_read_length=args.max_read_length,
         shuffle=False,
-        num_workers=args.num_workers
+        # num_workers=0
+        num_workers=get_allocated_cpus(),
+        prefetch_factor=2
     )
 
-    iters_in_epoch = len(dataset)
+    if args.load_latest_checkpoint:
+        (
+            nucleotide_embeddings, cigar_embeddings, base_quality_embeddings,
+            strand_embeddings, mate_pair_embeddings,
+            gate_projection, feature_projection, readformer_model,
+            ref_base_embedding, classifier, optimiser, start_epoch, i
+        ) = load_latest_checkpoint(args, device)
 
-    # If the model has been loaded from a checkpoint the scheduler should be
-    # parameterised with the iteration and epoch.
-    last_absolute_iter = start_epoch * iters_in_epoch + i
+        # We have start_epoch and i from the checkpoint
+
+        last_absolute_iter = start_epoch * iters_in_epoch + i
+
+    else:
+        if args.pre_trained_path:
+            # Load the pre-trained model weights only
+            (
+                nucleotide_embeddings, cigar_embeddings, base_quality_embeddings,
+                strand_embeddings, mate_pair_embeddings,
+                gate_projection, feature_projection, readformer_model
+            ) = load_pretrained_model(args, device)
+            # Fine-tuning from pre-trained but no previous fine-tune steps done
+            start_epoch = 0
+            i = 0
+        else:
+            # Training from scratch (no pre-training)
+            (
+                nucleotide_embeddings, cigar_embeddings, base_quality_embeddings,
+                strand_embeddings, mate_pair_embeddings,
+                gate_projection, feature_projection, readformer_model
+            ) = instantiate_model(args, device)
+            start_epoch = 0
+            i = 0
+
+        ref_base_embedding = NucleotideEmbeddingLayer(
+            args.emb_dim, mlm_mode=True
+        ).to(device)
+
+        classifier = BetaDistributionClassifier(
+            input_dim=args.emb_dim,
+            hidden_dim=args.emb_dim // 2
+        ).to(device)
+
+        min_lr = args.base_lr / 3
+        param_groups = get_layerwise_param_groups(
+            readformer_model, args.base_lr, min_lr
+        )
+
+        embedding_params = (
+                list(nucleotide_embeddings.parameters())
+                + list(cigar_embeddings.parameters())
+                + list(base_quality_embeddings.parameters())
+                + list(strand_embeddings.parameters())
+                + list(mate_pair_embeddings.parameters())
+                + list(gate_projection.parameters())
+                + list(feature_projection.parameters())
+        )
+        param_groups.append({
+            'params': embedding_params,
+            'lr': min_lr
+        })
+
+        classifier_params = (
+                list(classifier.parameters())
+                + list(ref_base_embedding.parameters())
+        )
+        param_groups.append({
+            'params': classifier_params,
+            'lr': args.base_lr
+        })
+
+        optimiser = AdamW(param_groups, eps=1e-9, weight_decay=0.05)
+
+        # Since this is a new fine-tune start (either from scratch or pre-trained),
+        # no iterations done yet.
+        last_absolute_iter = start_epoch * iters_in_epoch + i
+
     if last_absolute_iter == 0:
         last_absolute_iter = -1
+    else:
+        last_absolute_iter = last_absolute_iter % steps_per_phase
 
     scheduler = CosineAnnealingScheduler(
-        optimiser, iters_in_epoch, peak_pct=0.3, eta_min=1e-5,
-        last_epoch=last_absolute_iter
+        optimiser, steps_per_phase,
+        peak_pct=0.3, eta_min=1e-5,
+        last_epoch=last_absolute_iter,
+        max_lr=[group['lr'] for group in optimiser.param_groups]
     )
+
+    if args.pre_trained_path:
+        # freeze all pre-trained layers
+        for param in nucleotide_embeddings.parameters():
+            param.requires_grad = False
+        for param in cigar_embeddings.parameters():
+            param.requires_grad = False
+        for param in base_quality_embeddings.parameters():
+            param.requires_grad = False
+        for param in strand_embeddings.parameters():
+            param.requires_grad = False
+        for param in mate_pair_embeddings.parameters():
+            param.requires_grad = False
+        for param in gate_projection.parameters():
+            param.requires_grad = False
+        for param in feature_projection.parameters():
+            param.requires_grad = False
+        for param in readformer_model.parameters():
+            param.requires_grad = False
+
+    best_validation_loss = float('inf')
     for epoch in range(start_epoch, args.epochs):
+
         for batch in dataset:
+
+            if i % steps_per_phase == 0:
+                scheduler = CosineAnnealingScheduler(
+                    optimiser, steps_per_phase,
+                    peak_pct=0.3, eta_min=1e-5,
+                    last_epoch=-1,
+                    max_lr=[group['lr'] for group in optimiser.param_groups]
+                )
+
+            phase_index = (i // steps_per_phase) + (epoch * args.phases_per_epoch)
+
+            if args.pre_trained_path:
+                unfreeze_layers_by_epoch(
+                    optimiser.param_groups, phase_index, ignore_groups=[13]
+                )
+
+            nucleotide_embeddings.train()
+            cigar_embeddings.train()
+            base_quality_embeddings.train()
+            strand_embeddings.train()
+            mate_pair_embeddings.train()
+            feature_projection.train()
+            gate_projection.train()
+            readformer_model.train()
+            classifier.train()
+            ref_base_embedding.train()
+
             epoch_loss = []
             nucleotide_sequences = batch['nucleotide_sequences'].to(device)
             base_qualities = batch['base_qualities'].to(device)
@@ -468,303 +567,337 @@ def main():
             mutation_positions = torch.unsqueeze(mutation_positions, -1)
             del batch
 
-            # Forward pass through the model to compute the loss and train the model
-            nucleotide_embs = nucleotide_embeddings(nucleotide_sequences)
-            reference_embs = ref_base_embedding(reference).squeeze(-2)
+            with device_context(device):
+                # Forward pass through the model to compute the loss and train the model
+                nucleotide_embs = nucleotide_embeddings(nucleotide_sequences)
+                reference_embs = ref_base_embedding(reference).squeeze(-2)
 
-            metric_encoding = torch.cat(
-                [
-                    cigar_embeddings(cigar_encoding),
-                    base_quality_embeddings(base_qualities),
-                    strand_embeddings(mapped_to_reverse),
-                    mate_pair_embeddings(is_first)
-                ],
-                dim=-1
-            )
-
-            gate = torch.sigmoid(gate_projection(metric_encoding))
-            swish_out = F.silu(feature_projection(nucleotide_embs))
-            model_input = swish_out * gate + nucleotide_embs
-            readformer_out = readformer_model(model_input, positions)
-
-            # Get indices of the mutation positions.
-            indices = torch.nonzero(positions == mutation_positions, as_tuple=True)
-
-            if indices[0].shape != args.batch_size:
-                # Figure out which sequence is missing
-                missing_indices = torch.tensor(
-                    list(set(range(args.batch_size)) - set(indices[0].tolist())))
-                remaining_indices = torch.tensor(
-                    list(set(range(args.batch_size)) - set(missing_indices.tolist())))
-
-                # keep references and labels of the remaining sequences
-                reference_embs = reference_embs[remaining_indices]
-                labels = labels[remaining_indices]
-                read_support = read_support[remaining_indices]
-                num_in_class = num_in_class[remaining_indices]
-
-            classifier_in = readformer_out[indices]
-
-            alphas, betas = classifier(
-                classifier_in,
-                reference_embs
-            )
-
-            eff_class_num = get_effective_number(num_in_class)
-            eff_mut_num = get_effective_number(read_support)
-            loss_weight = 1 / (eff_class_num * eff_mut_num + 1e-12)
-
-            alphas = alphas.squeeze(-1)
-            betas = betas.squeeze(-1)
-
-            loss = loss_fn(alphas, betas, labels, loss_weight) * 1000000
-            # convert labels tensor to torch.int32
-            labels = labels.to(torch.int32)
-            iter_train_metrics.update(
-                alphas.detach(),
-                betas.detach(),
-                labels.detach().to(torch.int32)
-            )
-            epoch_train_metrics.update(
-                alphas.detach(),
-                betas.detach(),
-                labels.detach().to(torch.int32)
-            )
-
-            iter_train_metric_dict = iter_train_metrics.compute()
-            iter_train_metrics.reset()
-
-            # Backward pass
-            optimiser.zero_grad()
-            loss.backward()
-
-            # Update weights
-            optimiser.step()
-            scheduler.step()
-
-            # Compute the loss
-            loss = loss.item()
-            epoch_loss.append(loss)
-
-            # Log the training metrics
-            logging.debug(f"Training metrics after at epoch {epoch} iteration {i}:")
-            logging.debug(f"Learning rate: {scheduler.get_lr()[0]:.6f}")
-            logging.debug(f"Loss: {loss}")
-            table_data = []
-            for key in iter_train_metrics.thresholds:
-                table_data.append([
-                    key,
-                    iter_train_metric_dict[f'Precision@{key}'],
-                    iter_train_metric_dict[f'Recall@{key}'],
-                    iter_train_metric_dict[f'F1-Score@{key}']
-                ])
-
-            # Define the table headers
-            headers = ["Threshold", "Precision", "Recall", "F1"]
-
-            # Log the table
-            logging.debug(
-                "\n" + tabulate(table_data, headers=headers, floatfmt=".5f"))
-            # Lower is better for Brier Score and Calibration Error (ECE) and
-            # higher is better for ROC AUC and PR AUC.
-            logging.debug(f"ROC AUC: {iter_train_metric_dict['ROC AUC']:.5f}")
-            logging.debug(f"PR AUC: {iter_train_metric_dict['PR AUC']:.5f}")
-            logging.debug(
-                f"Brier Score: {iter_train_metric_dict['Brier Score']:.5f}")
-            logging.debug(
-                f"Calibration Error (ECE): "
-                f"{iter_train_metric_dict['Calibration Error (ECE)']:.5f}"
-            )
-            logging.debug("\n")
-
-            i += 1
-            if i == iters_in_epoch:
-                if device.type == 'cuda':
-                    torch.cuda.empty_cache()
-                elif device.type == 'mps':
-                    pass
-                epoch += 1
-                i = 0
-                validation_losses = []
-                with torch.no_grad():
-                    for validation_batch in validation_dataset:
-                        nucleotide_sequences = validation_batch['nucleotide_sequences'].to(device)
-                        base_qualities = validation_batch['base_qualities'].to(device)
-                        cigar_encoding = validation_batch['cigar_encoding'].to(device)
-                        is_first = validation_batch['is_first'].to(device)
-                        mapped_to_reverse = validation_batch['mapped_to_reverse'].to(device)
-                        positions = validation_batch['positions'].to(device)
-                        read_support = validation_batch['read_support'].to(device)
-                        num_in_class = validation_batch['num_in_class'].to(device)
-                        labels = validation_batch['labels'].to(device)
-                        reference = validation_batch['reference'].to(device)
-                        mutation_positions = validation_batch['mut_pos'].to(device)
-                        mutation_positions = torch.unsqueeze(mutation_positions, -1)
-
-                        chr_ = validation_batch['chr']
-                        read_id = validation_batch['read_id']
-                        ref = validation_batch['ref']
-                        alt = validation_batch['alt']
-                        is_reverse = validation_batch['is_reverse']
-
-                        del validation_batch
-
-                        # Forward pass through the model to compute the loss and train the model
-                        nucleotide_embs = nucleotide_embeddings(nucleotide_sequences)
-                        reference_embs = ref_base_embedding(reference).squeeze(-2)
-
-                        metric_encoding = torch.cat(
-                            [
-                                cigar_embeddings(cigar_encoding),
-                                base_quality_embeddings(base_qualities),
-                                strand_embeddings(mapped_to_reverse),
-                                mate_pair_embeddings(is_first)
-                            ],
-                            dim=-1
-                        )
-
-                        gate = torch.sigmoid(gate_projection(metric_encoding))
-
-                        swish_out = F.silu(feature_projection(nucleotide_embs))
-
-                        model_input = swish_out * gate + nucleotide_embs
-
-                        readformer_out = readformer_model(model_input, positions)
-
-                        # Get indices of the mutation positions.
-                        indices = torch.nonzero(positions == mutation_positions, as_tuple=True)
-
-                        if indices[0].shape != args.batch_size:
-                            # Figure out which sequence is missing
-                            missing_indices = torch.tensor(
-                                list(set(range(args.batch_size)) - set(indices[0].tolist())))
-                            remaining_indices = torch.tensor(
-                                list(set(range(args.batch_size)) - set(missing_indices.tolist())))
-
-                            # keep references and labels of the remaining sequences
-                            reference_embs = reference_embs[remaining_indices]
-                            labels = labels[remaining_indices]
-                            read_support = read_support[remaining_indices]
-                            num_in_class = num_in_class[remaining_indices]
-
-                        classifier_in = readformer_out[indices]
-
-                        alphas, betas = classifier(
-                            classifier_in,
-                            reference_embs
-                        )
-
-                        eff_class_num = get_effective_number(num_in_class)
-                        eff_mut_num = get_effective_number(read_support)
-                        loss_weight = 1 / (eff_class_num * eff_mut_num + 1e-12)
-
-                        alphas = alphas.squeeze(-1)
-                        betas = betas.squeeze(-1)
-
-                        validation_losses.append(
-                            loss_fn(alphas, betas, labels, loss_weight) * 100000)
-
-                        # convert labels tensor to torch.int32
-                        validation_metrics.update(
-                            alphas.detach(),
-                            betas.detach(),
-                            labels.detach().to(torch.int32),
-                            chr_, mutation_positions, ref, alt, is_reverse,
-                            read_id
-                        )
-
-                validation_metric_dict = validation_metrics.compute()
-                validation_metrics.write_predictions_to_csv(
-                    epoch, args.name, args.fold, args.validation_output_dir
+                metric_encoding = torch.cat(
+                    [
+                        cigar_embeddings(cigar_encoding),
+                        base_quality_embeddings(base_qualities),
+                        strand_embeddings(mapped_to_reverse),
+                        mate_pair_embeddings(is_first)
+                    ],
+                    dim=-1
                 )
-                validation_metrics.reset()
-                epoch_train_metric_dict = epoch_train_metrics.compute()
-                epoch_train_metrics.reset()
 
-                # Log the validation metrics
-                logging.info(f"Validation metrics after epoch {epoch}:")
+                gate = torch.sigmoid(gate_projection(metric_encoding))
+                swish_out = F.silu(feature_projection(nucleotide_embs))
+                model_input = swish_out * gate + nucleotide_embs
+                readformer_out = readformer_model(model_input, positions)
+
+                # Get indices of the mutation positions.
+                indices = torch.nonzero(positions == mutation_positions, as_tuple=True)
+
+                if indices[0].shape != args.batch_size:
+                    # Figure out which sequence is missing
+                    missing_indices = torch.tensor(
+                        list(set(range(args.batch_size)) - set(indices[0].tolist())))
+                    remaining_indices = torch.tensor(
+                        list(set(range(args.batch_size)) - set(missing_indices.tolist())))
+
+                    # keep references and labels of the remaining sequences
+                    reference_embs = reference_embs[remaining_indices]
+                    labels = labels[remaining_indices]
+                    read_support = read_support[remaining_indices]
+                    num_in_class = num_in_class[remaining_indices]
+
+                classifier_in = readformer_out[indices]
+
+                alphas, betas = classifier(
+                    classifier_in,
+                    reference_embs
+                )
+
+                eff_class_num = get_effective_number(num_in_class)
+                eff_mut_num = get_effective_number(read_support)
+                loss_weight = 1 / (eff_class_num * eff_mut_num + 1e-12)
+
+                alphas = alphas.squeeze(-1)
+                betas = betas.squeeze(-1)
+
+                loss = loss_fn(alphas, betas, labels, loss_weight) * 1000000
+                # convert labels tensor to torch.int32
+                labels = labels.to(torch.int32)
+                iter_train_metrics.update(
+                    alphas.detach(),
+                    betas.detach(),
+                    labels.detach().to(torch.int32)
+                )
+                epoch_train_metrics.update(
+                    alphas.detach(),
+                    betas.detach(),
+                    labels.detach().to(torch.int32)
+                )
+
+                iter_train_metric_dict = iter_train_metrics.compute()
+                iter_train_metrics.reset()
+
+                # Backward pass
+                optimiser.zero_grad()
+                loss.backward()
+
+                # Update weights
+                optimiser.step()
+                scheduler.step()
+
+                # Compute the loss
+                loss = loss.item()
+                epoch_loss.append(loss)
+
+                # Log the training metrics
+                logging.debug(f"Training metrics after at epoch {epoch} iteration {i}:")
+                logging.debug(f"Learning rate: {max(scheduler.get_lr()):.6f}")
+                logging.debug(f"Loss: {loss}")
                 table_data = []
-                for key in validation_metrics.thresholds:
+                for key in iter_train_metrics.thresholds:
                     table_data.append([
                         key,
-                        validation_metric_dict[f'Precision@{key}'],
-                        validation_metric_dict[f'Recall@{key}'],
-                        validation_metric_dict[f'F1-Score@{key}']
+                        iter_train_metric_dict[f'Precision@{key}'],
+                        iter_train_metric_dict[f'Recall@{key}'],
+                        iter_train_metric_dict[f'F1-Score@{key}']
                     ])
 
                 # Define the table headers
                 headers = ["Threshold", "Precision", "Recall", "F1"]
 
                 # Log the table
-                logging.info(
+                logging.debug(
                     "\n" + tabulate(table_data, headers=headers, floatfmt=".5f"))
-                logging.info(f"ROC AUC: {validation_metric_dict['ROC AUC']:.5f}")
-                logging.info(f"PR AUC: {validation_metric_dict['PR AUC']:.5f}")
-                logging.info(
-                    f"Brier Score: {validation_metric_dict['Brier Score']:.5f}")
-                logging.info(
+                # Lower is better for Brier Score and Calibration Error (ECE) and
+                # higher is better for ROC AUC and PR AUC.
+                logging.debug(f"ROC AUC: {iter_train_metric_dict['ROC AUC']:.5f}")
+                logging.debug(f"PR AUC: {iter_train_metric_dict['PR AUC']:.5f}")
+                logging.debug(
+                    f"Brier Score: {iter_train_metric_dict['Brier Score']:.5f}")
+                logging.debug(
                     f"Calibration Error (ECE): "
-                    f"{validation_metric_dict['Calibration Error (ECE)']:.5f}"
-                    f"\n\n"
+                    f"{iter_train_metric_dict['Calibration Error (ECE)']:.5f}"
                 )
-
+                logging.debug("\n")
                 if args.wandb:
-                    for metric_name, metric_value in validation_metric_dict.items():
-                        wandb.log(
-                            f"Validation {metric_name}", metric_value, step=epoch)
-                    for metric_name, metric_value in epoch_train_metric_dict.items():
-                        wandb.log(
-                            f"Training {metric_name}", metric_value, step=epoch
+                    # Log the iteration metrics to Weights & Biases. I think only
+                    # the loss is useful here.
+                    wandb.log(
+                        {
+                            "iter_loss": loss,
+                            "iter_largest_lr": max(scheduler.get_lr())
+                        }
+                    )
+
+                i += 1
+
+                if i > 0 and (i % steps_per_phase == 0):
+
+                    validation_losses = []
+                    # turn off dropouts for all layers during validation
+                    nucleotide_embeddings.eval()
+                    cigar_embeddings.eval()
+                    base_quality_embeddings.eval()
+                    strand_embeddings.eval()
+                    mate_pair_embeddings.eval()
+                    feature_projection.eval()
+                    gate_projection.eval()
+                    readformer_model.eval()
+                    classifier.eval()
+                    ref_base_embedding.eval()
+
+                    with torch.no_grad():
+                        for validation_batch in validation_dataset:
+                            nucleotide_sequences = validation_batch['nucleotide_sequences'].to(device)
+                            base_qualities = validation_batch['base_qualities'].to(device)
+                            cigar_encoding = validation_batch['cigar_encoding'].to(device)
+                            is_first = validation_batch['is_first'].to(device)
+                            mapped_to_reverse = validation_batch['mapped_to_reverse'].to(device)
+                            positions = validation_batch['positions'].to(device)
+                            read_support = validation_batch['read_support'].to(device)
+                            num_in_class = validation_batch['num_in_class'].to(device)
+                            labels = validation_batch['labels'].to(device)
+                            reference = validation_batch['reference'].to(device)
+                            mutation_positions = validation_batch['mut_pos'].to(device)
+                            mutation_positions = torch.unsqueeze(mutation_positions, -1)
+
+                            chr_ = validation_batch['chr']
+                            read_id = validation_batch['read_id']
+                            ref = validation_batch['ref']
+                            alt = validation_batch['alt']
+                            is_reverse = validation_batch['is_reverse']
+
+                            del validation_batch
+
+                            # Forward pass through the model to compute the loss and train the model
+                            nucleotide_embs = nucleotide_embeddings(nucleotide_sequences)
+                            reference_embs = ref_base_embedding(reference).squeeze(-2)
+
+                            metric_encoding = torch.cat(
+                                [
+                                    cigar_embeddings(cigar_encoding),
+                                    base_quality_embeddings(base_qualities),
+                                    strand_embeddings(mapped_to_reverse),
+                                    mate_pair_embeddings(is_first)
+                                ],
+                                dim=-1
+                            )
+
+                            gate = torch.sigmoid(gate_projection(metric_encoding))
+
+                            swish_out = F.silu(feature_projection(nucleotide_embs))
+
+                            model_input = swish_out * gate + nucleotide_embs
+
+                            readformer_out = readformer_model(model_input, positions)
+
+                            # Get indices of the mutation positions.
+                            indices = torch.nonzero(positions == mutation_positions, as_tuple=True)
+
+                            if indices[0].shape != args.batch_size:
+                                # Figure out which sequence is missing
+                                missing_indices = torch.tensor(
+                                    list(set(range(args.batch_size)) - set(indices[0].tolist())))
+                                remaining_indices = torch.tensor(
+                                    list(set(range(args.batch_size)) - set(missing_indices.tolist())))
+
+                                # keep references and labels of the remaining sequences
+                                reference_embs = reference_embs[remaining_indices]
+                                labels = labels[remaining_indices]
+                                read_support = read_support[remaining_indices]
+                                num_in_class = num_in_class[remaining_indices]
+
+                            classifier_in = readformer_out[indices]
+
+                            alphas, betas = classifier(
+                                classifier_in,
+                                reference_embs
+                            )
+
+                            eff_class_num = get_effective_number(num_in_class)
+                            eff_mut_num = get_effective_number(read_support)
+                            loss_weight = 1 / (eff_class_num * eff_mut_num + 1e-12)
+
+                            alphas = alphas.squeeze(-1)
+                            betas = betas.squeeze(-1)
+
+                            validation_losses.append(
+                                loss_fn(alphas, betas, labels, loss_weight) * 100000)
+
+                            # convert labels tensor to torch.int32
+                            validation_metrics.update(
+                                alphas.detach(),
+                                betas.detach(),
+                                labels.detach().to(torch.int32),
+                                chr_, mutation_positions, ref, alt, is_reverse,
+                                read_id
+                            )
+
+
+                        validation_metric_dict = validation_metrics.compute()
+                        validation_metrics.write_predictions_to_csv(
+                            phase_index, epoch, args.fold,
+                            args.validation_output_dir
                         )
-                    # plot validation ROC curve with all predicted probabilities
-                    wandb.log(
-                        "Validation ROC Curve",
-                        wandb.plot.roc_curve(
-                            validation_metric_dict['labels'],
-                            validation_metric_dict['Predictions']
-                        ),
-                        step=epoch
-                    )
-                    # plot validation PR curve with all predicted probabilities
-                    wandb.log(
-                        "Validation PR Curve",
-                        wandb.plot.pr_curve(
-                            validation_metric_dict['labels'],
-                            validation_metric_dict['Predictions']
-                        ),
-                        step=epoch
-                    )
-                    wandb.log(
-                        "Validation Loss",
-                        torch.mean(torch.tensor(validation_losses)).item(),
-                        step=epoch
-                    )
-                    wandb.log(
-                        "Training Loss",
-                        loss,
-                        step=epoch
-                    )
+                        validation_metrics.reset()
+                        epoch_train_metric_dict = epoch_train_metrics.compute()
+                        epoch_train_metrics.reset()
 
-                # Save the model checkpoint, should save everything loaded by the
-                # load_latest_checkpoint function.
-                update = {
-                    'nucleotide_embeddings_state_dict': nucleotide_embeddings.state_dict(),
-                    'cigar_embeddings_state_dict': cigar_embeddings.state_dict(),
-                    'base_quality_embeddings_state_dict': base_quality_embeddings.state_dict(),
-                    'strand_embeddings_state_dict': strand_embeddings.state_dict(),
-                    'mate_pair_embeddings_state_dict': mate_pair_embeddings.state_dict(),
-                    'gate_projection_state_dict': gate_projection.state_dict(),
-                    'feature_projection_state_dict': feature_projection.state_dict(),
-                    'model_state_dict': readformer_model.state_dict(),
-                    'ref_base_embedding_state_dict': ref_base_embedding.state_dict(),
-                    'classifier_state_dict': classifier.state_dict(),
-                    'optimiser_state_dict': optimiser.state_dict(),
-                    'epoch': epoch,
-                    'iteration': i
-                }
-                torch.save(update, args.finetune_save_path)
-                if args.wandb:
-                    wandb.save(args.finetune_save_path)
+                        # Log the validation metrics
+                        logging.info(
+                            f"Validation metrics after phase {phase_index} "
+                            f"({phase_index % (args.phases_per_epoch - 1)} of "
+                            f"{args.phases_per_epoch - 1} phases, in epoch {epoch}):"
+                        )
+                        table_data = []
+                        for key in validation_metrics.thresholds:
+                            table_data.append([
+                                key,
+                                validation_metric_dict[f'Precision@{key}'],
+                                validation_metric_dict[f'Recall@{key}'],
+                                validation_metric_dict[f'F1-Score@{key}']
+                            ])
+
+                        # Define the table headers
+                        headers = ["Threshold", "Precision", "Recall", "F1"]
+
+                        # Log the table
+                        logging.info(
+                            "\n" + tabulate(table_data, headers=headers, floatfmt=".5f"))
+                        logging.info(f"ROC AUC: {validation_metric_dict['ROC AUC']:.5f}")
+                        logging.info(f"PR AUC: {validation_metric_dict['PR AUC']:.5f}")
+                        logging.info(
+                            f"Brier Score: {validation_metric_dict['Brier Score']:.5f}")
+                        logging.info(
+                            f"Calibration Error (ECE): "
+                            f"{validation_metric_dict['Calibration Error (ECE)']:.5f}"
+                            f"\n\n"
+                        )
+
+                        if args.wandb:
+                            for metric_name, metric_value in validation_metric_dict.items():
+                                wandb.log(
+                                    f"Validation {metric_name}", metric_value,
+                                    step=phase_index
+                                )
+                            for metric_name, metric_value in epoch_train_metric_dict.items():
+                                wandb.log(
+                                    f"Training {metric_name}", metric_value,
+                                    step=phase_index
+                                )
+                            # plot validation ROC curve with all predicted probabilities
+                            wandb.log(
+                                "Validation ROC Curve",
+                                wandb.plot.roc_curve(
+                                    validation_metric_dict['labels'],
+                                    validation_metric_dict['Predictions']
+                                ),
+                                step=phase_index
+                            )
+                            # plot validation PR curve with all predicted probabilities
+                            wandb.log(
+                                "Validation PR Curve",
+                                wandb.plot.pr_curve(
+                                    validation_metric_dict['labels'],
+                                    validation_metric_dict['Predictions']
+                                ),
+                                step=phase_index
+                            )
+                            wandb.log(
+                                "Validation Loss",
+                                torch.mean(torch.tensor(validation_losses)).item(),
+                                step=phase_index
+                            )
+                            wandb.log(
+                                "Training Loss",
+                                torch.mean(torch.tensor(epoch_loss)).item(),
+                                step=phase_index
+                            )
+
+
+                        # Save the model checkpoint, should save everything loaded by the
+                        # load_latest_checkpoint function.
+                        update = {
+                            'nucleotide_embeddings_state_dict': nucleotide_embeddings.state_dict(),
+                            'cigar_embeddings_state_dict': cigar_embeddings.state_dict(),
+                            'base_quality_embeddings_state_dict': base_quality_embeddings.state_dict(),
+                            'strand_embeddings_state_dict': strand_embeddings.state_dict(),
+                            'mate_pair_embeddings_state_dict': mate_pair_embeddings.state_dict(),
+                            'gate_projection_state_dict': gate_projection.state_dict(),
+                            'feature_projection_state_dict': feature_projection.state_dict(),
+                            'model_state_dict': readformer_model.state_dict(),
+                            'ref_base_embedding_state_dict': ref_base_embedding.state_dict(),
+                            'classifier_state_dict': classifier.state_dict(),
+                            'optimiser_state_dict': optimiser.state_dict(),
+                            'epoch': epoch,
+                            'iteration': i
+                        }
+                        torch.save(update, args.finetune_save_path)
+                        if args.wandb:
+                            wandb.save(args.finetune_save_path)
+
+            if i == iters_in_epoch:
+                epoch += 1
+                i = 0
+
+
 
     if args.wandb:
         wandb.finish()

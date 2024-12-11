@@ -329,8 +329,10 @@ class FineTuningMetrics:
             self.labels = []
             self.additional_info = []
 
-    def write_predictions_to_csv(self, epoch, model_name, fold, output_dir):
-        filename = f"{model_name}_fold_{fold}_epoch_{epoch}_predictions.csv"
+    def write_predictions_to_csv(self, phase, epoch, fold, output_dir):
+        filename = (
+            f"fold_{fold}_phase_{phase:03d}_epoch_{epoch:03d}_predictions.csv"
+        )
         os.makedirs(output_dir, exist_ok=True)
         output_path = os.path.join(output_dir, filename)
         with open(output_path, mode='w', newline='') as file:
