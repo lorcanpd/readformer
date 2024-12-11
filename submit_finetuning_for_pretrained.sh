@@ -80,7 +80,8 @@ singularity exec --nv \
   --bind ${MUT_BAI}:/data/pretrain/BAM/mutation_reads.bam.bai \
   --bind ${ART_BAM}:/data/pretrain/BAM/HG002_artefacts.bam \
   --bind ${ART_BAI}:/data/pretrain/BAM/HG002_artefacts.bam.bai \
-  --bind ${METADATA_DIR}:/pretrain/VCF \
+  --bind ${METADATA_DIR}/train_fold_${FOLD}.csv:/data/pretrain/VCF/train_fold_${FOLD}.csv \
+  --bind ${METADATA_DIR}/test_fold_${FOLD}.csv:/data/pretrain/VCF/test_fold_${FOLD}.csv \
   --bind ${FINETUNE_DIR}:/models \
   --bind ${VALIDATION_OUTPUT_DIR}:/nst_dir \
   --bind ${PRETRAIN_DIR}/${PRE_TRAINED_MODEL_NAME}:/nfs/${PRE_TRAINED_MODEL_NAME} \

@@ -394,8 +394,9 @@ def main():
         max_read_length=args.max_read_length,
         shuffle=True,
         # num_workers=0,
-        num_workers=get_allocated_cpus(),
-        prefetch_factor=2
+        num_workers=get_allocated_cpus()//2,
+        prefetch_factor=1
+
     )
     iters_in_epoch = len(dataset)
     steps_per_phase = iters_in_epoch // args.phases_per_epoch
@@ -410,8 +411,8 @@ def main():
         max_read_length=args.max_read_length,
         shuffle=False,
         # num_workers=0
-        num_workers=get_allocated_cpus(),
-        prefetch_factor=2
+        num_workers=get_allocated_cpus()//2,
+        prefetch_factor=1
     )
 
     if args.load_latest_checkpoint:
