@@ -315,9 +315,9 @@ class FineTuningMetrics:
         metrics['Brier Score'] = self.brier.compute()
         metrics['Calibration Error (ECE)'] = self.calibration_error.compute().item()
 
-        if self.store_predictions:
-            metrics['Predictions'] = self.pred_probs
-            metrics['Labels'] = self.labels
+        # if self.store_predictions:
+        #     metrics['Predictions'] = self.pred_probs
+        #     metrics['Labels'] = self.labels
 
         return metrics
 
