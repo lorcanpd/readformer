@@ -799,8 +799,7 @@ def main():
                                 torch.tensor(epoch_loss)).item()
 
                             wandb.log(
-                                log_entry,
-                                step=phase_index
+                                log_entry
                             )
 
                         # Save the model checkpoint, should save everything loaded by the
