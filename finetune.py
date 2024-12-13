@@ -764,45 +764,30 @@ def main():
                         )
 
                         if args.wandb:
+                            log_entry = {}
                             for metric_name, metric_value in validation_metric_dict.items():
-                                wandb.log(
-                                    f"Validation {metric_name}", metric_value,
-                                    step=phase_index
-                                )
-                            for metric_name, metric_value in epoch_train_metric_dict.items():
-                                wandb.log(
-                                    f"Training {metric_name}", metric_value,
-                                    step=phase_index
-                                )
-                            # plot validation ROC curve with all predicted probabilities
-                            wandb.log(
-                                "Validation ROC Curve",
-                                wandb.plot.roc_curve(
-                                    validation_metric_dict['labels'],
-                                    validation_metric_dict['Predictions']
-                                ),
-                                step=phase_index
-                            )
-                            # plot validation PR curve with all predicted probabilities
-                            wandb.log(
-                                "Validation PR Curve",
-                                wandb.plot.pr_curve(
-                                    validation_metric_dict['labels'],
-                                    validation_metric_dict['Predictions']
-                                ),
-                                step=phase_index
-                            )
-                            wandb.log(
-                                "Validation Loss",
-                                torch.mean(torch.tensor(validation_losses)).item(),
-                                step=phase_index
-                            )
-                            wandb.log(
-                                "Training Loss",
-                                torch.mean(torch.tensor(epoch_loss)).item(),
-                                step=phase_index
-                            )
+                                log_entry[f"Validation {metric_name}"] = metric_value
 
+                            for metric_name, metric_value in epoch_train_metric_dict.items():
+                                log_entry[f"Training {metric_name}"] = metric_value
+
+                            log_entry["Validation ROC Curve"] = wandb.plot.roc_curve(
+                                validation_metric_dict['labels'],
+                                validation_metric_dict['Predictions']
+                            )
+                            log_entry["Validation PR Curve"] = wandb.plot.pr_curve(
+                                validation_metric_dict['labels'],
+                                validation_metric_dict['Predictions']
+                            )
+                            log_entry["Validation Loss"] = torch.mean(
+                                torch.tensor(validation_losses)).item()
+                            log_entry["Training Loss"] = torch.mean(
+                                torch.tensor(epoch_loss)).item()
+
+                            wandb.log(
+                                log_entry,
+                                step=phase_index
+                            )
 
                         # Save the model checkpoint, should save everything loaded by the
                         # load_latest_checkpoint function.
