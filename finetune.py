@@ -763,7 +763,7 @@ def main():
                             f"{validation_metric_dict['Calibration Error (ECE)']:.5f}"
                             f"\n\n"
                         )
-                        breakpoint()
+
                         if args.wandb:
                             log_entry = {}
                             for metric_name, metric_value in validation_metric_dict.items():
