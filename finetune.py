@@ -3,6 +3,7 @@ import torch
 from torch.optim import AdamW
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.optim.lr_scheduler import OneCycleLR
 import os
 import sys
 
@@ -14,17 +15,13 @@ import multiprocessing as mp
 # Import the necessary modules from your components
 from components.base_model import Model
 from components.read_embedding import (
-    NucleotideEmbeddingLayer,
-    CigarEmbeddingLayer,
-    BaseQualityEmbeddingLayer,
-    StrandEmbeddingLayer,
-    MatePairEmbeddingLayer
-)
+    InputEmbeddingLayer, NucleotideEmbeddingLayer)
 from components.finetune_data_streaming import create_finetuning_dataloader
 from components.classification_head import BetaDistributionClassifier
 from components.utils import get_effective_number, get_layerwise_param_groups
-from components.metrics import BetaBernoulliLoss, FineTuningMetrics
-from components.scheduler import CosineAnnealingScheduler
+from components.metrics import (
+    BetaBernoulliLoss, FineTuningMetrics, compute_load_balance_loss)
+# from components.scheduler import CosineAnnealingScheduler
 from pretrain_readwise_only import device_context, check_cuda_availability
 
 def get_args():
@@ -159,24 +156,9 @@ def get_args():
 
 
 def instantiate_model(args, device):
-    nucleotide_embeddings = NucleotideEmbeddingLayer(
-        args.emb_dim, mlm_mode=True
+    input_embedding = InputEmbeddingLayer(
+        args.emb_dim
     ).to(device)
-    cigar_embeddings = CigarEmbeddingLayer(
-        args.emb_dim // 4
-    ).to(device)
-    base_quality_embeddings = BaseQualityEmbeddingLayer(
-        args.emb_dim // 4
-    ).to(device)
-    strand_embeddings = StrandEmbeddingLayer(
-        args.emb_dim // 4
-    ).to(device)
-    mate_pair_embeddings = MatePairEmbeddingLayer(
-        args.emb_dim // 4
-    ).to(device)
-
-    gate_projection = nn.Linear(args.emb_dim, args.emb_dim).to(device)
-    feature_projection = nn.Linear(args.emb_dim, args.emb_dim).to(device)
 
     readformer_model = Model(
         emb_dim=args.emb_dim, heads=args.num_heads, num_layers=args.num_layers,
@@ -186,9 +168,7 @@ def instantiate_model(args, device):
     ).to(device)
 
     return (
-        nucleotide_embeddings, cigar_embeddings, base_quality_embeddings,
-        strand_embeddings, mate_pair_embeddings,
-        gate_projection, feature_projection, readformer_model
+         input_embedding, readformer_model
     )
 
 
@@ -196,9 +176,7 @@ def load_pretrained_model(args, device):
     # Instantiate the models (nucleotide_embeddings, metric_embeddings, readformer)
 
     (
-        nucleotide_embeddings, cigar_embeddings, base_quality_embeddings,
-        strand_embeddings, mate_pair_embeddings,
-        gate_projection, feature_projection, readformer_model
+        input_embedding, readformer_model
     ) = instantiate_model(args, device)
 
     # Load the checkpoint
@@ -208,21 +186,13 @@ def load_pretrained_model(args, device):
     checkpoint = torch.load(args.pre_trained_path, map_location=device)
 
     # Load state_dicts
-    nucleotide_embeddings.load_state_dict(checkpoint['nucleotide_embeddings_state_dict'])
-    cigar_embeddings.load_state_dict(checkpoint['cigar_embeddings_state_dict'])
-    base_quality_embeddings.load_state_dict(checkpoint['base_quality_embeddings_state_dict'])
-    strand_embeddings.load_state_dict(checkpoint['strand_embeddings_state_dict'])
-    mate_pair_embeddings.load_state_dict(checkpoint['mate_pair_embeddings_state_dict'])
-    gate_projection.load_state_dict(checkpoint['gate_projection_state_dict'])
-    feature_projection.load_state_dict(checkpoint['feature_projection_state_dict'])
+    input_embedding.load_state_dict(checkpoint['input_embedding_state_dict'])
     readformer_model.load_state_dict(checkpoint['model_state_dict'])
 
     logging.info(f"Loaded pre-trained model from '{args.pre_trained_path}'")
 
     return (
-        nucleotide_embeddings, cigar_embeddings, base_quality_embeddings,
-        strand_embeddings, mate_pair_embeddings,
-        gate_projection, feature_projection, readformer_model
+        input_embedding, readformer_model
     )
 
 
@@ -242,9 +212,7 @@ def load_latest_checkpoint(args, device):
 
     # Load the models
     (
-        nucleotide_embeddings, cigar_embeddings, base_quality_embeddings,
-        strand_embeddings, mate_pair_embeddings,
-        gate_projection, feature_projection, readformer_model
+        input_embedding, readformer_model
     ) = instantiate_model(args, device)
 
     ref_base_embedding = NucleotideEmbeddingLayer(
@@ -256,26 +224,14 @@ def load_latest_checkpoint(args, device):
     ).to(device)
 
     # Load state_dicts
-    nucleotide_embeddings.load_state_dict(checkpoint['nucleotide_embeddings_state_dict'])
-    cigar_embeddings.load_state_dict(checkpoint['cigar_embeddings_state_dict'])
-    base_quality_embeddings.load_state_dict(checkpoint['base_quality_embeddings_state_dict'])
-    strand_embeddings.load_state_dict(checkpoint['strand_embeddings_state_dict'])
-    mate_pair_embeddings.load_state_dict(checkpoint['mate_pair_embeddings_state_dict'])
-    gate_projection.load_state_dict(checkpoint['gate_projection_state_dict'])
-    feature_projection.load_state_dict(checkpoint['feature_projection_state_dict'])
+    input_embedding.load_state_dict(checkpoint['input_embedding_state_dict'])
     readformer_model.load_state_dict(checkpoint['model_state_dict'])
     ref_base_embedding.load_state_dict(checkpoint['ref_base_embedding_state_dict'])
     classifier.load_state_dict(checkpoint['classifier_state_dict'])
 
     # Load the optimiser state
     optimiser = AdamW(
-        list(nucleotide_embeddings.parameters())
-        + list(cigar_embeddings.parameters())
-        + list(base_quality_embeddings.parameters())
-        + list(strand_embeddings.parameters())
-        + list(mate_pair_embeddings.parameters())
-        + list(gate_projection.parameters())
-        + list(feature_projection.parameters())
+        list(input_embedding.parameters())
         + list(readformer_model.parameters())
         + list(ref_base_embedding.parameters())
         + list(classifier.parameters())
@@ -290,9 +246,7 @@ def load_latest_checkpoint(args, device):
     logging.info(f"Loaded latest checkpoint from '{latest_checkpoint}'")
 
     return (
-        nucleotide_embeddings, cigar_embeddings, base_quality_embeddings,
-        strand_embeddings, mate_pair_embeddings,
-        gate_projection, feature_projection, readformer_model,
+        input_embedding, readformer_model,
         ref_base_embedding, classifier, optimiser, epoch, i
     )
 
@@ -385,55 +339,16 @@ def main():
         device=device, store_predictions=True
     )
 
-    # TODO: Look into the prefetch parameters!
-    dataset = create_finetuning_dataloader(
-        csv_path=f'{args.finetune_metadata_dir}/train_fold_{args.fold}.csv',
-        artefact_bam_path=args.artefact_bam_path,
-        mutation_bam_path=args.mutation_bam_path,
-        batch_size=args.batch_size,
-        max_read_length=args.max_read_length,
-        shuffle=True,
-        # num_workers=0,
-        num_workers=get_allocated_cpus()//2,
-        prefetch_factor=1
-
-    )
-    iters_in_epoch = len(dataset)
-    steps_per_phase = iters_in_epoch // args.phases_per_epoch
-
-    validation_dataset = create_finetuning_dataloader(
-        csv_path=f'{args.finetune_metadata_dir}/test_fold_{args.fold}.csv',
-        artefact_bam_path=args.artefact_bam_path,
-        mutation_bam_path=args.mutation_bam_path,
-        batch_size=args.batch_size,
-        # Only one epoch for validation but we need to loop through it after
-        # training epoch multiple times.
-        max_read_length=args.max_read_length,
-        shuffle=False,
-        # num_workers=0
-        num_workers=get_allocated_cpus()//2,
-        prefetch_factor=1
-    )
-
     if args.load_latest_checkpoint:
         (
-            nucleotide_embeddings, cigar_embeddings, base_quality_embeddings,
-            strand_embeddings, mate_pair_embeddings,
-            gate_projection, feature_projection, readformer_model,
+            input_embedding, readformer_model,
             ref_base_embedding, classifier, optimiser, start_epoch, i
         ) = load_latest_checkpoint(args, device)
-
-        # We have start_epoch and i from the checkpoint
-
-        last_absolute_iter = start_epoch * iters_in_epoch + i
-
     else:
         if args.pre_trained_path:
             # Load the pre-trained model weights only
             (
-                nucleotide_embeddings, cigar_embeddings, base_quality_embeddings,
-                strand_embeddings, mate_pair_embeddings,
-                gate_projection, feature_projection, readformer_model
+                input_embedding, readformer_model
             ) = load_pretrained_model(args, device)
             # Fine-tuning from pre-trained but no previous fine-tune steps done
             start_epoch = 0
@@ -441,9 +356,7 @@ def main():
         else:
             # Training from scratch (no pre-training)
             (
-                nucleotide_embeddings, cigar_embeddings, base_quality_embeddings,
-                strand_embeddings, mate_pair_embeddings,
-                gate_projection, feature_projection, readformer_model
+                input_embedding, readformer_model
             ) = instantiate_model(args, device)
             start_epoch = 0
             i = 0
@@ -462,15 +375,7 @@ def main():
             readformer_model, args.base_lr, min_lr
         )
 
-        embedding_params = (
-                list(nucleotide_embeddings.parameters())
-                + list(cigar_embeddings.parameters())
-                + list(base_quality_embeddings.parameters())
-                + list(strand_embeddings.parameters())
-                + list(mate_pair_embeddings.parameters())
-                + list(gate_projection.parameters())
-                + list(feature_projection.parameters())
-        )
+        embedding_params = list(input_embedding.parameters())
         param_groups.append({
             'params': embedding_params,
             'lr': min_lr
@@ -487,40 +392,85 @@ def main():
 
         optimiser = AdamW(param_groups, eps=1e-9, weight_decay=0.05)
 
-        # Since this is a new fine-tune start (either from scratch or pre-trained),
-        # no iterations done yet.
-        last_absolute_iter = start_epoch * iters_in_epoch + i
+    dataset = create_finetuning_dataloader(
+        csv_path=f'{args.finetune_metadata_dir}/train_fold_{args.fold}.csv',
+        artefact_bam_path=args.artefact_bam_path,
+        mutation_bam_path=args.mutation_bam_path,
+        batch_size=args.batch_size,
+        base_quality_pad_idx=input_embedding.base_quality_embeddings.padding_idx,
+        cigar_pad_idx=input_embedding.cigar_embeddings.padding_idx,
+        is_first_pad_idx=input_embedding.mate_pair_embeddings.padding_idx,
+        mapped_to_reverse_pad_idx=input_embedding.strand_embeddings.padding_idx,
+        position_pad_idx=-1,
+        max_read_length=args.max_read_length,
+        shuffle=True,
+        # num_workers=0,
+        num_workers=get_allocated_cpus() // 2,
+        prefetch_factor=1
+
+    )
+
+    validation_dataset = create_finetuning_dataloader(
+        csv_path=f'{args.finetune_metadata_dir}/test_fold_{args.fold}.csv',
+        artefact_bam_path=args.artefact_bam_path,
+        mutation_bam_path=args.mutation_bam_path,
+        batch_size=args.batch_size,
+        base_quality_pad_idx=input_embedding.base_quality_embeddings.padding_idx,
+        cigar_pad_idx=input_embedding.cigar_embeddings.padding_idx,
+        is_first_pad_idx=input_embedding.mate_pair_embeddings.padding_idx,
+        mapped_to_reverse_pad_idx=input_embedding.strand_embeddings.padding_idx,
+        position_pad_idx=-1,
+        # Only one epoch for validation but we need to loop through it after
+        # training epoch multiple times.
+        max_read_length=args.max_read_length,
+        shuffle=False,
+        # num_workers=0
+        num_workers=get_allocated_cpus() // 2,
+        prefetch_factor=1
+    )
+
+    iters_in_epoch = len(dataset)
+    steps_per_phase = iters_in_epoch // args.phases_per_epoch
+
+    last_absolute_iter = start_epoch * iters_in_epoch + i
 
     if last_absolute_iter == 0:
         last_absolute_iter = -1
     else:
         last_absolute_iter = last_absolute_iter % steps_per_phase
 
-    scheduler = CosineAnnealingScheduler(
-        optimiser, steps_per_phase,
-        peak_pct=0.3, eta_min=1e-5,
-        last_epoch=last_absolute_iter,
-        max_lr=[group['lr'] for group in optimiser.param_groups]
+    # scheduler = CosineAnnealingScheduler(
+    #     optimiser, steps_per_phase,
+    #     peak_pct=0.3, eta_min=1e-5,
+    #     last_epoch=last_absolute_iter,
+    #     max_lr=[group['lr'] for group in optimiser.param_groups]
+    # )
+    max_lr_list = [group['lr'] for group in optimiser.param_groups]
+    scheduler = OneCycleLR(
+        optimiser, max_lr=max_lr_list, total_steps=steps_per_phase,
+        pct_start=0.3, anneal_strategy='cos', cycle_momentum=False,
+        last_epoch=last_absolute_iter
     )
 
-    if args.pre_trained_path:
-        # freeze all pre-trained layers
-        for param in nucleotide_embeddings.parameters():
-            param.requires_grad = False
-        for param in cigar_embeddings.parameters():
-            param.requires_grad = False
-        for param in base_quality_embeddings.parameters():
-            param.requires_grad = False
-        for param in strand_embeddings.parameters():
-            param.requires_grad = False
-        for param in mate_pair_embeddings.parameters():
-            param.requires_grad = False
-        for param in gate_projection.parameters():
-            param.requires_grad = False
-        for param in feature_projection.parameters():
-            param.requires_grad = False
-        for param in readformer_model.parameters():
-            param.requires_grad = False
+
+    # if args.pre_trained_path:
+    #     # freeze all pre-trained layers
+    #     for param in nucleotide_embeddings.parameters():
+    #         param.requires_grad = False
+    #     for param in cigar_embeddings.parameters():
+    #         param.requires_grad = False
+    #     for param in base_quality_embeddings.parameters():
+    #         param.requires_grad = False
+    #     for param in strand_embeddings.parameters():
+    #         param.requires_grad = False
+    #     for param in mate_pair_embeddings.parameters():
+    #         param.requires_grad = False
+    #     for param in gate_projection.parameters():
+    #         param.requires_grad = False
+    #     for param in feature_projection.parameters():
+    #         param.requires_grad = False
+    #     for param in readformer_model.parameters():
+    #         param.requires_grad = False
 
     best_validation_loss = float('inf')
     for epoch in range(start_epoch, args.epochs):
@@ -528,27 +478,30 @@ def main():
         for batch in dataset:
 
             if i % steps_per_phase == 0:
-                scheduler = CosineAnnealingScheduler(
-                    optimiser, steps_per_phase,
-                    peak_pct=0.3, eta_min=1e-5,
-                    last_epoch=-1,
-                    max_lr=[group['lr'] for group in optimiser.param_groups]
+                # scheduler = CosineAnnealingScheduler(
+                #     optimiser, steps_per_phase,
+                #     peak_pct=0.3, eta_min=1e-5,
+                #     last_epoch=-1,
+                #     max_lr=[group['lr'] for group in optimiser.param_groups]
+                # )
+                scheduler = OneCycleLR(
+                    optimiser, max_lr=max_lr_list, total_steps=steps_per_phase,
+                    pct_start=0.3, anneal_strategy='cos', cycle_momentum=False,
+                    last_epoch=-1
                 )
 
             phase_index = (i // steps_per_phase) + (epoch * args.phases_per_epoch)
 
             if args.pre_trained_path:
                 unfreeze_layers_by_epoch(
-                    optimiser.param_groups, phase_index, ignore_groups=[13]
+                    optimiser.param_groups, phase_index,
+                    # The classifier and ref_base_embedding are always unfrozen.
+                    # They are attached at the last element of the param_groups
+                    # list.
+                    ignore_groups=[len(optimiser.param_groups) - 1]
                 )
 
-            nucleotide_embeddings.train()
-            cigar_embeddings.train()
-            base_quality_embeddings.train()
-            strand_embeddings.train()
-            mate_pair_embeddings.train()
-            feature_projection.train()
-            gate_projection.train()
+            input_embedding.train()
             readformer_model.train()
             classifier.train()
             ref_base_embedding.train()
@@ -570,46 +523,37 @@ def main():
 
             with device_context(device):
                 # Forward pass through the model to compute the loss and train the model
-                nucleotide_embs = nucleotide_embeddings(nucleotide_sequences)
-                reference_embs = ref_base_embedding(reference).squeeze(-2)
-
-                metric_encoding = torch.cat(
-                    [
-                        cigar_embeddings(cigar_encoding),
-                        base_quality_embeddings(base_qualities),
-                        strand_embeddings(mapped_to_reverse),
-                        mate_pair_embeddings(is_first)
-                    ],
-                    dim=-1
+                model_input = input_embedding(
+                    nucleotide_sequences, cigar_encoding, base_qualities,
+                    mapped_to_reverse, is_first
                 )
-
-                gate = torch.sigmoid(gate_projection(metric_encoding))
-                swish_out = F.silu(feature_projection(nucleotide_embs))
-                model_input = swish_out * gate + nucleotide_embs
                 readformer_out = readformer_model(model_input, positions)
+                reference_embs = ref_base_embedding(reference).squeeze(-2)
 
                 # Get indices of the mutation positions.
                 indices = torch.nonzero(positions == mutation_positions, as_tuple=True)
 
-                if indices[0].shape != args.batch_size:
-                    # Figure out which sequence is missing
-                    missing_indices = torch.tensor(
-                        list(set(range(args.batch_size)) - set(indices[0].tolist())))
-                    remaining_indices = torch.tensor(
-                        list(set(range(args.batch_size)) - set(missing_indices.tolist())))
-
-                    # keep references and labels of the remaining sequences
-                    reference_embs = reference_embs[remaining_indices]
-                    labels = labels[remaining_indices]
-                    read_support = read_support[remaining_indices]
-                    num_in_class = num_in_class[remaining_indices]
+                # if indices[0].shape[0] != args.batch_size:
+                #     # Figure out which sequence is missing
+                #     missing_indices = torch.tensor(
+                #         list(set(range(args.batch_size)) - set(indices[0].tolist())))
+                #     remaining_indices = torch.tensor(
+                #         list(set(range(args.batch_size)) - set(missing_indices.tolist())))
+                #
+                #     # keep references and labels of the remaining sequences
+                #     reference_embs = reference_embs[remaining_indices]
+                #     labels = labels[remaining_indices]
+                #     read_support = read_support[remaining_indices]
+                #     num_in_class = num_in_class[remaining_indices]
 
                 classifier_in = readformer_out[indices]
 
-                alphas, betas = classifier(
+                alphas, betas, gate_alpha_scores, gate_beta_scores = classifier(
                     classifier_in,
                     reference_embs
                 )
+
+
 
                 eff_class_num = get_effective_number(num_in_class)
                 eff_mut_num = get_effective_number(read_support)
@@ -618,9 +562,17 @@ def main():
                 alphas = alphas.squeeze(-1)
                 betas = betas.squeeze(-1)
 
-                loss = loss_fn(alphas, betas, labels, loss_weight) * 1000000
+                loss = loss_fn(alphas, betas, labels, loss_weight) * 10
+
+                expert_balance_loss = compute_load_balance_loss(
+                    gate_alpha_scores, gate_beta_scores, loss_weight
+                )
+
+                loss += expert_balance_loss
+
                 # convert labels tensor to torch.int32
                 labels = labels.to(torch.int32)
+
                 iter_train_metrics.update(
                     alphas.detach(),
                     betas.detach(),
@@ -693,13 +645,7 @@ def main():
 
                     validation_losses = []
                     # turn off dropouts for all layers during validation
-                    nucleotide_embeddings.eval()
-                    cigar_embeddings.eval()
-                    base_quality_embeddings.eval()
-                    strand_embeddings.eval()
-                    mate_pair_embeddings.eval()
-                    feature_projection.eval()
-                    gate_projection.eval()
+                    input_embedding.eval()
                     readformer_model.eval()
                     classifier.eval()
                     ref_base_embedding.eval()
@@ -727,25 +673,11 @@ def main():
 
                             del validation_batch
 
-                            # Forward pass through the model to compute the loss and train the model
-                            nucleotide_embs = nucleotide_embeddings(nucleotide_sequences)
-                            reference_embs = ref_base_embedding(reference).squeeze(-2)
-
-                            metric_encoding = torch.cat(
-                                [
-                                    cigar_embeddings(cigar_encoding),
-                                    base_quality_embeddings(base_qualities),
-                                    strand_embeddings(mapped_to_reverse),
-                                    mate_pair_embeddings(is_first)
-                                ],
-                                dim=-1
+                            model_input = input_embedding(
+                                nucleotide_sequences, cigar_encoding,
+                                base_qualities,
+                                mapped_to_reverse, is_first
                             )
-
-                            gate = torch.sigmoid(gate_projection(metric_encoding))
-
-                            swish_out = F.silu(feature_projection(nucleotide_embs))
-
-                            model_input = swish_out * gate + nucleotide_embs
 
                             readformer_out = readformer_model(model_input, positions)
 
@@ -767,7 +699,7 @@ def main():
 
                             classifier_in = readformer_out[indices]
 
-                            alphas, betas = classifier(
+                            alphas, betas, _, _ = classifier(
                                 classifier_in,
                                 reference_embs
                             )
@@ -780,7 +712,7 @@ def main():
                             betas = betas.squeeze(-1)
 
                             validation_losses.append(
-                                loss_fn(alphas, betas, labels, loss_weight) * 100000)
+                                loss_fn(alphas, betas, labels, loss_weight))
 
                             # convert labels tensor to torch.int32
                             validation_metrics.update(
@@ -790,7 +722,6 @@ def main():
                                 chr_, mutation_positions, ref, alt, is_reverse,
                                 read_id
                             )
-
 
                         validation_metric_dict = validation_metrics.compute()
                         validation_metrics.write_predictions_to_csv(
@@ -876,13 +807,7 @@ def main():
                         # Save the model checkpoint, should save everything loaded by the
                         # load_latest_checkpoint function.
                         update = {
-                            'nucleotide_embeddings_state_dict': nucleotide_embeddings.state_dict(),
-                            'cigar_embeddings_state_dict': cigar_embeddings.state_dict(),
-                            'base_quality_embeddings_state_dict': base_quality_embeddings.state_dict(),
-                            'strand_embeddings_state_dict': strand_embeddings.state_dict(),
-                            'mate_pair_embeddings_state_dict': mate_pair_embeddings.state_dict(),
-                            'gate_projection_state_dict': gate_projection.state_dict(),
-                            'feature_projection_state_dict': feature_projection.state_dict(),
+                            'input_embedding_state_dict': input_embedding.state_dict(),
                             'model_state_dict': readformer_model.state_dict(),
                             'ref_base_embedding_state_dict': ref_base_embedding.state_dict(),
                             'classifier_state_dict': classifier.state_dict(),

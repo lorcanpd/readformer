@@ -119,6 +119,7 @@ class BetaBernoulliLoss(nn.Module):
 
     def forward(self, alpha, beta, labels, weighting=None):
 
+        # Clamping to avoid issues with digamma at 0 or negative values
         alpha = alpha.clamp(min=self.epsilon)
         beta = beta.clamp(min=self.epsilon)
 
@@ -128,13 +129,21 @@ class BetaBernoulliLoss(nn.Module):
         loss = - (labels * term1 + (1 - labels) * term2)
 
         if weighting is not None:
+            # Apply weighting per-sample
             loss = loss * weighting
 
         if self.reduction == 'sum':
             return loss.sum()
         elif self.reduction == 'mean':
-            return loss.mean()
+            if weighting is not None:
+                # Weighted mean: divide by sum of weights rather than batch size
+                total_weight = weighting.sum().clamp_min(self.epsilon)
+                return loss.sum() / total_weight
+            else:
+                # Standard mean reduction
+                return loss.mean()
         elif self.reduction is None:
+            # No reduction, return raw vector
             return loss
 
 
@@ -344,4 +353,46 @@ class FineTuningMetrics:
             for i, info in enumerate(self.additional_info):
                 writer.writerow(info + [self.labels[i]])
         logging.info(f"Predictions written to {output_path}")
+
+
+def compute_load_balance_loss(
+        gate_alpha_scores, gate_beta_scores, weights=None, eps=1e-7
+):
+    """
+    Compute an entropy-based load-balancing loss to ensure even usage of experts.
+    Higher entropy of expert usage distribution => more balanced use of experts.
+
+    :param gate_alpha_scores: (batch_size, num_experts)
+    :param gate_beta_scores: (batch_size, num_experts)
+    :param weights: (batch_size,) or None
+        A tensor of weights to handle class imbalance. If provided,
+        this will reweight the contribution of each sample to the
+        average usage.
+    :param eps: small number for numerical stability
+
+    :return: load_balance_loss (scalar)
+    """
+
+    # If weights are provided, compute weighted averages
+    if weights is not None:
+        # Ensure weights is a float tensor
+        weights = weights.to(gate_alpha_scores.dtype)
+        total_weight = weights.sum() + eps
+
+        # Weighted expert usage
+        alpha_expert_usage = (gate_alpha_scores * weights.unsqueeze(-1)).sum(dim=0) / total_weight
+        beta_expert_usage = (gate_beta_scores * weights.unsqueeze(-1)).sum(dim=0) / total_weight
+    else:
+        # Unweighted mean
+        alpha_expert_usage = gate_alpha_scores.mean(dim=0)  # (num_experts,)
+        beta_expert_usage = gate_beta_scores.mean(dim=0)    # (num_experts,)
+
+    # Define entropy function
+    def entropy(p):
+        return -(p * (p + eps).log()).sum()
+
+    # We want to maximize entropy, so we minimize negative entropy
+    load_balance_loss = - (entropy(alpha_expert_usage) + entropy(beta_expert_usage))
+    return load_balance_loss
+
 

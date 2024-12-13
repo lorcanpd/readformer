@@ -47,7 +47,10 @@ class BAMReadDataset(Dataset):
 
     def __init__(
             self, file_paths, metadata_path, nucleotide_threshold,
-            max_sequence_length, selected_positions=False, min_quality=0
+            max_sequence_length, base_quality_pad_idx,
+            cigar_pad_idx, position_pad_idx, is_first_pad_idx,
+            mapped_to_reverse_pad_idx,
+            selected_positions=False, min_quality=0
     ):
         """
         Initialise the dataset with file paths and metadata.
@@ -66,6 +69,11 @@ class BAMReadDataset(Dataset):
         self.nucleotide_threshold = nucleotide_threshold
         self.max_sequence_length = max_sequence_length
         self.metadata = pd.read_csv(metadata_path)
+        self.base_quality_pad_idx = base_quality_pad_idx
+        self.cigar_pad_idx = cigar_pad_idx
+        self.position_pad_idx = position_pad_idx
+        self.is_first_pad_idx = is_first_pad_idx
+        self.mapped_to_reverse_pad_idx = mapped_to_reverse_pad_idx
         self.selected_positions = selected_positions
         self.min_quality = min_quality
         if os.path.isdir(file_paths):
@@ -160,11 +168,11 @@ class BAMReadDataset(Dataset):
         # Pad sequences to the max sequence length
         padding_length = self.max_sequence_length - len(nucleotide_sequences)
         nucleotide_sequences += [''] * padding_length
-        base_qualities += [-1] * padding_length
-        cigar_encoding += [-1] * padding_length
-        positions += [-1] * padding_length
-        is_first_flags += [-1] * padding_length
-        mapped_to_reverse_flags += [-1] * padding_length
+        base_qualities += [self.base_quality_pad_idx] * padding_length
+        cigar_encoding += [self.cigar_pad_idx] * padding_length
+        positions += [self.position_pad_idx] * padding_length
+        is_first_flags += [self.is_first_pad_idx] * padding_length
+        mapped_to_reverse_flags += [self.mapped_to_reverse_pad_idx] * padding_length
 
         logging.debug(
             f"Returning batch, number of nucleotide sequences: {len(nucleotide_sequences)}"
@@ -201,7 +209,10 @@ def worker_init_fn(worker_id):
 
 def create_data_loader(
         file_paths, metadata_path, nucleotide_threshold, max_sequence_length,
-        batch_size, min_quality, shuffle=True, num_workers=0, prefetch_factor=None
+        batch_size, min_quality, base_quality_pad_idx, cigar_pad_idx,
+        position_pad_idx, is_first_pad_idx, mapped_to_reverse_pad_idx,
+        shuffle=True, num_workers=0, prefetch_factor=None,
+
 ):
     """
     Create a DataLoader for batch processing of BAM file reads.
@@ -224,6 +235,8 @@ def create_data_loader(
     logging.info("Creating BAMReadDataset...")
     dataset = BAMReadDataset(
         file_paths, metadata_path, nucleotide_threshold, max_sequence_length,
+        base_quality_pad_idx, cigar_pad_idx, position_pad_idx, is_first_pad_idx,
+        mapped_to_reverse_pad_idx,
         min_quality=min_quality
     )
 

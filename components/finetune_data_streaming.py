@@ -12,12 +12,20 @@ import logging
 class FineTuningDataset(Dataset):
     def __init__(
             self, csv_path, artefact_bam_path, mutation_bam_path,
+            base_quality_pad_idx,
+            cigar_pad_idx, position_pad_idx, is_first_pad_idx,
+            mapped_to_reverse_pad_idx,
             max_read_length=100, **kwargs
     ):
         self.data = pd.read_csv(csv_path)
         self.artefact_bam_path = artefact_bam_path
         self.mutation_bam_path = mutation_bam_path
         self.max_read_length = max_read_length
+        self.base_quality_pad_idx = base_quality_pad_idx
+        self.cigar_pad_idx = cigar_pad_idx
+        self.position_pad_idx = position_pad_idx
+        self.is_first_pad_idx = is_first_pad_idx
+        self.mapped_to_reverse_pad_idx = mapped_to_reverse_pad_idx
 
     def __len__(self):
         return len(self.data)
@@ -91,11 +99,11 @@ class FineTuningDataset(Dataset):
             # Pad sequences to the max sequence length
         padding_length = self.max_read_length - len(nucleotide_sequences)
         nucleotide_sequences += [''] * padding_length
-        base_qualities += [-1] * padding_length
-        cigar_encoding += [-1] * padding_length
-        positions += [-1] * padding_length
-        is_first_flags += [-1] * padding_length
-        mapped_to_reverse_flags += [-1] * padding_length
+        base_qualities += [self.base_quality_pad_idx] * padding_length
+        cigar_encoding += [self.cigar_pad_idx] * padding_length
+        positions += [self.position_pad_idx] * padding_length
+        is_first_flags += [self.is_first_pad_idx] * padding_length
+        mapped_to_reverse_flags += [self.mapped_to_reverse_pad_idx] * padding_length
 
         return {
             # Sequences
@@ -206,12 +214,17 @@ def collate_fn(batch):
 
 def create_finetuning_dataloader(
         csv_path, artefact_bam_path, mutation_bam_path, batch_size,
+        base_quality_pad_idx, cigar_pad_idx,
+        position_pad_idx, is_first_pad_idx, mapped_to_reverse_pad_idx,
         max_read_length=100, shuffle=True, num_workers=0, prefetch_factor=None,
         collate_fn=collate_fn
 ):
     logging.info("Creating fine-tuning data loader.")
     dataset = FineTuningDataset(
-        csv_path, artefact_bam_path, mutation_bam_path, max_read_length
+        csv_path, artefact_bam_path, mutation_bam_path,
+        base_quality_pad_idx, cigar_pad_idx,
+        position_pad_idx, is_first_pad_idx, mapped_to_reverse_pad_idx,
+        max_read_length=max_read_length
     )
 
     if len(dataset) > 0:

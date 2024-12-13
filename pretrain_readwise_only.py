@@ -5,13 +5,14 @@ from torch.optim import AdamW
 from torch.optim.lr_scheduler import OneCycleLR
 from components.pretrain_data_streaming import create_data_loader
 from components.base_model import Model, init_weights
-from components.read_embedding import (
-    NucleotideEmbeddingLayer,
-    CigarEmbeddingLayer,
-    BaseQualityEmbeddingLayer,
-    StrandEmbeddingLayer,
-    MatePairEmbeddingLayer
-)
+# from components.read_embedding import (
+#     NucleotideEmbeddingLayer,
+#     CigarEmbeddingLayer,
+#     BaseQualityEmbeddingLayer,
+#     StrandEmbeddingLayer,
+#     MatePairEmbeddingLayer
+# )
+from components.read_embedding import InputEmbeddingLayer
 from components.classification_head import MLMClassifier
 from components.utils import (
     apply_masking_with_consistent_replacements,
@@ -164,12 +165,7 @@ def load_checkpoint(
         # model_dir, model_name,
         checkpoint_path,
         model, classifier, base_quality_classifier,
-        nucleotide_embeddings,
-        cigar_embeddings, base_quality_embeddings,
-        strand_embeddings, mate_pair_embeddings,
-        gate_projection, feature_projection,
-        # float_metric_embeddings, binary_metric_embeddings,
-        # metric_embeddings,
+        input_embedding,
         optimiser
 ):
     # checkpoint_path = os.path.join(model_dir, model_name)
@@ -179,13 +175,7 @@ def load_checkpoint(
         model.load_state_dict(checkpoint['model_state_dict'])
         classifier.load_state_dict(checkpoint['classifier_state_dict'])
         base_quality_classifier.load_state_dict(checkpoint['base_quality_classifier_state_dict'])
-        nucleotide_embeddings.load_state_dict(checkpoint['nucleotide_embeddings_state_dict'])
-        cigar_embeddings.load_state_dict(checkpoint['cigar_embeddings_state_dict'])
-        base_quality_embeddings.load_state_dict(checkpoint['base_quality_embeddings_state_dict'])
-        strand_embeddings.load_state_dict(checkpoint['strand_embeddings_state_dict'])
-        mate_pair_embeddings.load_state_dict(checkpoint['mate_pair_embeddings_state_dict'])
-        gate_projection.load_state_dict(checkpoint['gate_projection_state_dict'])
-        feature_projection.load_state_dict(checkpoint['feature_projection_state_dict'])
+        input_embedding.load_state_dict(checkpoint['input_embedding_state_dict'])
         optimiser.load_state_dict(checkpoint['optimiser_state_dict'])
         epoch = checkpoint['epoch']
         mean_loss = checkpoint['mean_loss']
@@ -246,8 +236,9 @@ def main():
     num_attention = args.num_attention
     checkpoint_path = (
         f"{args.model_dir}/{emb_dim}d_{num_layers}l_{num_hyena}h_"
-        f"{num_attention}a_{num_heads}.pth"
+        f"{num_attention}a_{num_heads}h.pth"
     )
+    max_base_quality = 40
 
     # Map the string logging level to the actual logging level
     numeric_level = getattr(logging, args.logging.upper(), None)
@@ -325,30 +316,28 @@ def main():
     # torch.autograd.set_detect_anomaly(True)
 
     mask_rate = 1.0 - 2 * proportion_random
-    nucleotide_embeddings = NucleotideEmbeddingLayer(
-        emb_dim, mlm_mode=True
-    ).apply(init_weights).to(device)
-    nuc_mask_index = nucleotide_embeddings.mask_index
+    # nucleotide_embeddings = NucleotideEmbeddingLayer(
+    #     emb_dim, mlm_mode=True
+    # ).apply(init_weights).to(device)
+    # cigar_embeddings = CigarEmbeddingLayer(
+    #     emb_dim // 4
+    # ).apply(init_weights).to(device)
+    # base_quality_embeddings = BaseQualityEmbeddingLayer(
+    #     emb_dim // 4
+    # ).apply(init_weights).to(device)
+    # strand_embeddings = StrandEmbeddingLayer(
+    #     emb_dim // 4
+    # ).apply(init_weights).to(device)
+    # mate_pair_embeddings = MatePairEmbeddingLayer(
+    #     emb_dim // 4
+    # ).apply(init_weights).to(device)
+    #
+    # gate_projection = nn.Linear(emb_dim, emb_dim).to(device).train()
+    # feature_projection = nn.Linear(emb_dim, emb_dim).to(device).train()
 
-    cigar_embeddings = CigarEmbeddingLayer(
-        emb_dim // 4
-    ).apply(init_weights).to(device)
-    cig_mask_index = cigar_embeddings.mask_index
-    base_quality_embeddings = BaseQualityEmbeddingLayer(
-        emb_dim // 4
-    ).apply(init_weights).to(device)
-    base_qual_mask_index = base_quality_embeddings.mask_index
-    strand_embeddings = StrandEmbeddingLayer(
-        emb_dim // 4
-    ).apply(init_weights).to(device)
-    strand_mask_index = strand_embeddings.mask_index
-    mate_pair_embeddings = MatePairEmbeddingLayer(
-        emb_dim // 4
-    ).apply(init_weights).to(device)
-    pair_mask_index = mate_pair_embeddings.mask_index
-
-    gate_projection = nn.Linear(emb_dim, emb_dim).to(device).train()
-    feature_projection = nn.Linear(emb_dim, emb_dim).to(device).train()
+    input_embedding = InputEmbeddingLayer(
+        emb_dim, max_quality=max_base_quality
+    ).to(device).train()
 
     readformer = Model(
         emb_dim=emb_dim, heads=num_heads, num_layers=num_layers,
@@ -360,25 +349,27 @@ def main():
     # readformer.set_use_positionwise_self_attention(False)
 
     classifier = MLMClassifier(
-        emb_dim=emb_dim, num_classes=nucleotide_embeddings.padding_idx
+        emb_dim=emb_dim, num_classes=input_embedding.nucleotide_embeddings.padding_idx
     ).apply(init_weights).to(device).train()
 
-    base_quality_classifier = nn.Linear(emb_dim, 41).to(device).train()
+    base_quality_classifier = nn.Linear(
+        emb_dim, max_base_quality + 1).to(device).train()
 
     min_lr = main_lr / 3
     param_groups = get_layerwise_param_groups(
         readformer, main_lr, min_lr
     )
     # Add the embedding layers to the parameter groups
-    embedding_params = (
-            list(nucleotide_embeddings.parameters()) +
-            list(cigar_embeddings.parameters()) +
-            list(base_quality_embeddings.parameters()) +
-            list(strand_embeddings.parameters()) +
-            list(mate_pair_embeddings.parameters()) +
-            list(gate_projection.parameters()) +
-            list(feature_projection.parameters())
-    )
+    # embedding_params = (
+    #         list(nucleotide_embeddings.parameters()) +
+    #         list(cigar_embeddings.parameters()) +
+    #         list(base_quality_embeddings.parameters()) +
+    #         list(strand_embeddings.parameters()) +
+    #         list(mate_pair_embeddings.parameters()) +
+    #         list(gate_projection.parameters()) +
+    #         list(feature_projection.parameters())
+    # )
+    embedding_params = list(input_embedding.parameters())
     param_groups.append({
         "params": embedding_params,
         "lr": min_lr
@@ -420,10 +411,7 @@ def main():
             checkpoint_path,
             readformer, classifier,
             base_quality_classifier,
-            nucleotide_embeddings,
-            cigar_embeddings, base_quality_embeddings,
-            strand_embeddings, mate_pair_embeddings,
-            gate_projection, feature_projection,
+            input_embedding,
             optimiser
         )
         if epoch is None:
@@ -486,6 +474,11 @@ def main():
         max_sequence_length=max_sequence_length,
         batch_size=batch_size,
         min_quality=min_read_quality,
+        base_quality_pad_idx=input_embedding.base_quality_embeddings.padding_idx,
+        cigar_pad_idx=input_embedding.cigar_embeddings.padding_idx,
+        position_pad_idx=-1,
+        is_first_pad_idx=input_embedding.mate_pair_embeddings.padding_idx,
+        mapped_to_reverse_pad_idx=input_embedding.strand_embeddings.padding_idx,
         shuffle=True,
         num_workers=get_allocated_cpus()-1,
         # num_workers=0,
@@ -507,14 +500,13 @@ def main():
 
     # ground truth
     validation_nucleotide_sequences = validation_batch['nucleotide_sequences'].to(device)
-    validation_base_qualities = validation_batch['base_qualities'].to(device).clamp(0, 40)
+    validation_base_qualities = validation_batch['base_qualities'].clamp(0, max_base_quality).to(device)
     del validation_batch
 
     # Iterate through data
     for batch in data_loader:
         # Turn on the dropout layers
-        gate_projection.train()
-        feature_projection.train()
+        input_embedding.train()
         readformer.train()
         classifier.train()
         base_quality_classifier.train()
@@ -524,7 +516,7 @@ def main():
         nucleotide_sequences = batch['nucleotide_sequences']
         valid_mask = (
                 nucleotide_sequences !=
-                nucleotide_embeddings.padding_idx
+                input_embedding.nucleotide_embeddings.padding_idx
         )
         base_qualities = batch['base_qualities']
         cigar_encodings = batch['cigar_encoding']
@@ -535,7 +527,7 @@ def main():
         positions = positions.to(device)
         valid_mask = valid_mask.to(device)
         nucleotide_sequences = nucleotide_sequences.to(device)
-        base_qualities = base_qualities.to(device).clamp(0, 40)
+        base_qualities = base_qualities.clamp(0, max_base_quality).to(device)
         cigar_encodings = cigar_encodings.to(device)
         is_first = is_first.to(device)
         mapped_reverse = mapped_reverse.to(device)
@@ -544,7 +536,7 @@ def main():
             (
                 masked_sequences, masked_indices, replaced_indices
             ) = apply_masking_with_consistent_replacements(
-                nucleotide_sequences, nuc_mask_index,
+                nucleotide_sequences, input_embedding.nucleotide_embeddings.mask_index,
                 rate=corruption_rate, mask_rate=mask_rate,
                 replace_rate=proportion_random,
                 kernel_size=kernel_size, split=0.5
@@ -553,45 +545,57 @@ def main():
             num_replaced = replaced_indices.sum().item()
 
             masked_cigar_encodings = cigar_encodings.clone().to(device)
-            masked_cigar_encodings[masked_indices] = cig_mask_index
+            masked_cigar_encodings[masked_indices] = input_embedding.cigar_embeddings.mask_index
+            masked_cigar_encodings[~valid_mask] = input_embedding.cigar_embeddings.padding_idx
             # replace the masked indices with num_replaced random indices
             masked_cigar_encodings[replaced_indices] = torch.randint(
                 0, 4, (num_replaced,), dtype=torch.int32, device=device
             )
             masked_base_qualities = base_qualities.clone().to(device)
-            masked_base_qualities[masked_indices] = base_qual_mask_index
             masked_base_qualities[replaced_indices] = torch.randint(
                 0, 45, (num_replaced,), dtype=torch.int32, device=device
             )
+
             masked_is_first = is_first.clone().to(device)
-            masked_is_first[masked_indices] = pair_mask_index
+            masked_is_first[masked_indices] = input_embedding.mate_pair_embeddings.mask_index
+            masked_is_first[~valid_mask] = input_embedding.mate_pair_embeddings.padding_idx
             masked_mapped_reverse = mapped_reverse.clone().to(device)
-            masked_mapped_reverse[masked_indices] = strand_mask_index
+            masked_mapped_reverse[masked_indices] = input_embedding.strand_embeddings.mask_index
+            masked_mapped_reverse[~valid_mask] = input_embedding.strand_embeddings.padding_idx
+            #
+            # masked_nucleotide_emb = nucleotide_embeddings(masked_sequences)
+            #
+            # # Concatenate the metrics embeddings.
+            # metric_emb = torch.cat(
+            #     [
+            #         cigar_embeddings(masked_cigar_encodings),
+            #         base_quality_embeddings(
+            #             masked_base_qualities, masked_indices, ~valid_mask
+            #         ),
+            #         strand_embeddings(masked_mapped_reverse),
+            #         mate_pair_embeddings(masked_is_first)
+            #     ],
+            #     dim=-1
+            # )
+            #
+            # # Gate the nucleotide embeddings using the metrics embeddings a la
+            # # SwiGLU.
+            # gate = torch.sigmoid(
+            #     gate_projection(metric_emb))
+            # swish_output = F.silu(
+            #     feature_projection(masked_nucleotide_emb))
+            # # Apply the gating mechanism to the nucleotide embeddings with dropout.
+            # model_input = F.dropout(
+            #     gate * swish_output, p=0.1, training=True
+            # ).to(device) + masked_nucleotide_emb
 
-            masked_nucleotide_emb = nucleotide_embeddings(masked_sequences)
-
-            # Concatenate the metrics embeddings.
-            metric_emb = torch.cat(
-                [
-                    cigar_embeddings(masked_cigar_encodings),
-                    base_quality_embeddings(masked_base_qualities),
-                    strand_embeddings(masked_mapped_reverse),
-                    mate_pair_embeddings(masked_is_first)
-                ],
-                dim=-1
+            model_input = input_embedding(
+                masked_sequences, masked_cigar_encodings,
+                masked_base_qualities, masked_mapped_reverse,
+                masked_is_first,
+                to_be_masked=masked_indices,
+                to_be_padded=~valid_mask
             )
-
-            # Gate the nucleotide embeddings using the metrics embeddings a la
-            # SwiGLU.
-            gate = torch.sigmoid(
-                gate_projection(metric_emb))
-            swish_output = F.silu(
-                feature_projection(masked_nucleotide_emb))
-            # Apply the gating mechanism to the nucleotide embeddings with dropout.
-            model_input = F.dropout(
-                gate * swish_output, p=0.1, training=True
-            ).to(device) + masked_nucleotide_emb
-
             # Get the output from the model
             output = readformer(model_input, positions)
             base_quality_output = base_quality_classifier(
@@ -648,8 +652,7 @@ def main():
                     and args.logging.upper() == 'DEBUG'):
                 torch.cuda.synchronize()
 
-            gate_projection.eval()
-            feature_projection.eval()
+            input_embedding.eval()
             readformer.eval()
             classifier.eval()
             base_quality_classifier.eval()
@@ -657,25 +660,33 @@ def main():
             # Validation forward pass.
             with torch.no_grad():
 
-                val_masked_nucleotide_emb = nucleotide_embeddings(
-                    validation_masked_sequences)
-                val_metric_emb = torch.cat(
-                    [
-                        cigar_embeddings(validation_masked_cigar_encodings),
-                        base_quality_embeddings(validation_masked_base_qualities),
-                        strand_embeddings(validation_masked_mapped_to_reverse),
-                        mate_pair_embeddings(validation_masked_is_first)
-                    ],
-                    dim=-1
+                # val_masked_nucleotide_emb = nucleotide_embeddings(
+                #     validation_masked_sequences)
+                # val_metric_emb = torch.cat(
+                #     [
+                #         cigar_embeddings(validation_masked_cigar_encodings),
+                #         base_quality_embeddings(validation_masked_base_qualities),
+                #         strand_embeddings(validation_masked_mapped_to_reverse),
+                #         mate_pair_embeddings(validation_masked_is_first)
+                #     ],
+                #     dim=-1
+                # )
+
+                # # SwiGLU gating.
+                # val_gate = torch.sigmoid(
+                #     gate_projection(val_metric_emb))
+                # val_swish_output = F.silu(
+                #     feature_projection(val_masked_nucleotide_emb))
+                # val_model_input = val_gate * val_swish_output + val_masked_nucleotide_emb
+                val_model_input = input_embedding(
+                    validation_masked_sequences,
+                    validation_masked_cigar_encodings,
+                    validation_masked_base_qualities,
+                    validation_masked_mapped_to_reverse,
+                    validation_masked_is_first,
+                    to_be_masked=validation_masked_indices,
+                    to_be_padded=~validation_valid_mask
                 )
-
-                # SwiGLU gating.
-                val_gate = torch.sigmoid(
-                    gate_projection(val_metric_emb))
-                val_swish_output = F.silu(
-                    feature_projection(val_masked_nucleotide_emb))
-                val_model_input = val_gate * val_swish_output + val_masked_nucleotide_emb
-
                 # Forward pass
                 val_output = readformer(val_model_input, validation_positions)
 
@@ -792,19 +803,8 @@ def main():
                     'classifier_state_dict': classifier.state_dict(),
                     'base_quality_classifier_state_dict':
                         base_quality_classifier.state_dict(),
-                    'nucleotide_embeddings_state_dict':
-                        nucleotide_embeddings.state_dict(),
-                    'cigar_embeddings_state_dict': cigar_embeddings.state_dict(),
-                    'base_quality_embeddings_state_dict':
-                        base_quality_embeddings.state_dict(),
-                    'strand_embeddings_state_dict':
-                        strand_embeddings.state_dict(),
-                    'mate_pair_embeddings_state_dict':
-                        mate_pair_embeddings.state_dict(),
-                    'gate_projection_state_dict':
-                        gate_projection.state_dict(),
-                    'feature_projection_state_dict':
-                        feature_projection.state_dict(),
+                    'input_embedding_state_dict':
+                        input_embedding.state_dict(),
                     'optimiser_state_dict': optimiser.state_dict(),
                     'mean_loss': mean_loss,
                     'i': i,
