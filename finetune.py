@@ -533,18 +533,18 @@ def main():
                 # Get indices of the mutation positions.
                 indices = torch.nonzero(positions == mutation_positions, as_tuple=True)
 
-                # if indices[0].shape[0] != args.batch_size:
-                #     # Figure out which sequence is missing
-                #     missing_indices = torch.tensor(
-                #         list(set(range(args.batch_size)) - set(indices[0].tolist())))
-                #     remaining_indices = torch.tensor(
-                #         list(set(range(args.batch_size)) - set(missing_indices.tolist())))
-                #
-                #     # keep references and labels of the remaining sequences
-                #     reference_embs = reference_embs[remaining_indices]
-                #     labels = labels[remaining_indices]
-                #     read_support = read_support[remaining_indices]
-                #     num_in_class = num_in_class[remaining_indices]
+                if indices[0].shape[0] != args.batch_size:
+                    # Figure out which sequence is missing
+                    missing_indices = torch.tensor(
+                        list(set(range(args.batch_size)) - set(indices[0].tolist())))
+                    remaining_indices = torch.tensor(
+                        list(set(range(args.batch_size)) - set(missing_indices.tolist())))
+
+                    # keep references and labels of the remaining sequences
+                    reference_embs = reference_embs[remaining_indices]
+                    labels = labels[remaining_indices]
+                    read_support = read_support[remaining_indices]
+                    num_in_class = num_in_class[remaining_indices]
 
                 classifier_in = readformer_out[indices]
 
