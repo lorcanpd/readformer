@@ -11,6 +11,7 @@ import logging
 import wandb
 from tabulate import tabulate
 import multiprocessing as mp
+import numpy as np
 
 # Import the necessary modules from your components
 from components.base_model import Model
@@ -762,7 +763,7 @@ def main():
                             f"{validation_metric_dict['Calibration Error (ECE)']:.5f}"
                             f"\n\n"
                         )
-
+                        breakpoint()
                         if args.wandb:
                             log_entry = {}
                             for metric_name, metric_value in validation_metric_dict.items():
@@ -770,15 +771,23 @@ def main():
 
                             for metric_name, metric_value in epoch_train_metric_dict.items():
                                 log_entry[f"Training {metric_name}"] = metric_value
+                            try:
+                                labels = np.array(
+                                    validation_metric_dict['Labels'])
+                                predictions = np.array(
+                                    validation_metric_dict['Predictions'])
+                                y_probas = np.stack(
+                                    [1 - predictions, predictions], axis=1)
 
-                            log_entry["Validation ROC Curve"] = wandb.plot.roc_curve(
-                                validation_metric_dict['labels'],
-                                validation_metric_dict['Predictions']
-                            )
-                            log_entry["Validation PR Curve"] = wandb.plot.pr_curve(
-                                validation_metric_dict['labels'],
-                                validation_metric_dict['Predictions']
-                            )
+                                log_entry["Validation ROC Curve"] = wandb.plot.roc_curve(
+                                    labels, y_probas
+                                )
+                                log_entry["Validation PR Curve"] = wandb.plot.pr_curve(
+                                    labels, y_probas
+                                )
+                            except Exception as e:
+                                logging.error(f"Error plotting ROC/PR curve: {e}")
+
                             log_entry["Validation Loss"] = torch.mean(
                                 torch.tensor(validation_losses)).item()
                             log_entry["Training Loss"] = torch.mean(
