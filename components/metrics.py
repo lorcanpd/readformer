@@ -202,129 +202,124 @@ class FineTuningMetrics:
             store_predictions=False
     ):
         """
-        Initializes all metrics, including the custom Brier Score, for multiple
-        thresholds.
-
-        :param thresholds:
-            List of classification thresholds to compute metrics for.
-        :param num_classes:
-            Number of classes in the classification task. Default is 1 for
-            binary classification.
-        :param device:
-            Device to perform computations on ('cuda' or 'cpu').
+        Initialise metrics. Does not open CSV yet.
+        Use supply_phase() to specify phase details and open CSV if needed.
         """
         self.device = device
         self.thresholds = thresholds
         self.num_thresholds = len(thresholds)
-        if num_classes == 1:
-            task = 'binary'
-        else:
-            task = 'multiclass'
-        # Initialise dictionaries to hold metrics for each threshold
+
+        task = 'binary' if num_classes == 1 else 'multiclass'
+
         self.precision = {
-            th: Precision(
-                num_classes=num_classes, task=task).to(self.device)
+            th: Precision(num_classes=num_classes, task=task).to(self.device)
             for th in thresholds
         }
         self.recall = {
-            th: Recall(
-                num_classes=num_classes, task=task).to(self.device)
+            th: Recall(num_classes=num_classes, task=task).to(self.device)
             for th in thresholds
         }
         self.f1 = {
-            th: F1Score(
-                num_classes=num_classes, task=task).to(self.device)
+            th: F1Score(num_classes=num_classes, task=task).to(self.device)
             for th in thresholds
         }
 
-        # Aggregated Metrics
         self.roc_auc = AUROC(task=task).to(self.device)
         self.pr_auc = AveragePrecision(task=task).to(self.device)
-
-        # Probabilistic Metrics
         self.brier = BrierScoreMetric(device=self.device)
-
-        # Calibration Metrics
         self.calibration_error = CalibrationError(task=task).to(self.device)
+
         self.store_predictions = store_predictions
+        self.csv_writer = None
+        self.csv_file = None
+        self.output_dir = None
+        self.fold = None
+        self.phase = None
+        self.epoch = None
+
         self.reset()
 
+    def supply_phase(self, fold, phase, epoch, output_dir):
+        """
+        Supply the phase details before starting validation for that phase.
+        If store_predictions is True, open the CSV file here.
+        """
+        self.fold = fold
+        self.phase = phase
+        self.epoch = epoch
+        self.output_dir = output_dir
+
+        if self.store_predictions:
+            os.makedirs(self.output_dir, exist_ok=True)
+            filename = f"fold_{self.fold}_phase_{self.phase:03d}_epoch_{self.epoch:03d}_predictions.csv"
+            output_path = os.path.join(self.output_dir, filename)
+            self.csv_file = open(output_path, mode='w', newline='')
+            self.csv_writer = csv.writer(self.csv_file)
+            self.csv_writer.writerow([
+                'chr', 'pos', 'ref', 'alt', 'mapped_to_reverse', 'read_id',
+                'alpha', 'beta', 'label'
+            ])
+
     def update(
-            self, alpha, beta, labels, chr=None, pos=None, ref=None, alt=None,
+            self, alpha, beta, labels, chr_=None, pos=None, ref=None, alt=None,
             mapped_to_reverse=None, read_id=None
     ):
-        """
-        Updates all metrics with the latest batch for all thresholds.
-
-        :param alpha (Tensor):
-            Alpha parameter of the Beta distribution (batch_size,).
-        :param beta (Tensor):
-            Beta parameter of the Beta distribution (batch_size,).
-        :param labels (Tensor):
-            Ground truth labels (batch_size,).
-        """
-        # Ensure tensors are on the correct device
         alpha = alpha.to(self.device)
         beta = beta.to(self.device)
         labels = labels.to(self.device)
+        p = alpha / (alpha + beta + 1e-12)
 
-        # Compute predicted probabilities
-        p = alpha / (alpha + beta + 1e-12)  # Add epsilon to avoid division by 0
-
-        # Update aggregated metrics
         self.roc_auc.update(p, labels)
         self.pr_auc.update(p, labels)
         self.brier.update(p, labels)
         self.calibration_error.update(p, labels)
 
-        # Update metrics for each threshold
         for th in self.thresholds:
             preds = (p >= th).float()
             self.precision[th].update(preds, labels)
             self.recall[th].update(preds, labels)
             self.f1[th].update(preds, labels)
 
-        if self.store_predictions:
-            self.pred_probs.extend(p.detach().cpu().numpy().tolist())
-            self.labels.extend(labels.detach().cpu().numpy().tolist())
+        if self.store_predictions and self.csv_writer is not None:
+            batch_size = alpha.shape[0]
+            alpha_np = alpha.detach().cpu().numpy()
+            beta_np = beta.detach().cpu().numpy()
+            labels_np = labels.detach().cpu().numpy()
 
-            for idx in range(len(alpha)):
-                self.additional_info.append([
-                    chr[idx], pos[idx].item(), ref[idx], alt[idx],
-                    mapped_to_reverse[idx], read_id[idx],
-                    alpha[idx].item(), beta[idx].item()
+            # Handle missing info by filling with defaults
+            chr_ = chr_ if chr_ is not None else ['NA'] * batch_size
+            pos = pos if pos is not None else torch.zeros(batch_size)
+            if torch.is_tensor(pos):
+                pos = pos.detach().cpu().numpy()
+            # If pos is nested numpy array, flatten it
+            pos = [item for sublist in pos for item in sublist]
+            ref = ref if ref is not None else ['N'] * batch_size
+            alt = alt if alt is not None else ['N'] * batch_size
+            mapped_to_reverse = mapped_to_reverse if mapped_to_reverse is not None else ['NA'] * batch_size
+            read_id = read_id if read_id is not None else ['NA'] * batch_size
+
+            for i in range(batch_size):
+                self.csv_writer.writerow([
+                    chr_[i], pos[i], ref[i], alt[i], mapped_to_reverse[i],
+                    read_id[i], alpha_np[i], beta_np[i], labels_np[i]
                 ])
 
     def compute(self):
-        """
-        Computes and returns all metrics for each threshold and aggregated
-        metrics.
-
-        Returns:
-            dict: Dictionary containing all metric values.
-        """
         metrics = {}
         for th in self.thresholds:
             metrics[f'Precision@{th}'] = self.precision[th].compute().item()
             metrics[f'Recall@{th}'] = self.recall[th].compute().item()
             metrics[f'F1-Score@{th}'] = self.f1[th].compute().item()
 
-        # Aggregated Metrics
         metrics['ROC AUC'] = self.roc_auc.compute().item()
         metrics['PR AUC'] = self.pr_auc.compute().item()
         metrics['Brier Score'] = self.brier.compute()
         metrics['Calibration Error (ECE)'] = self.calibration_error.compute().item()
 
-        # if self.store_predictions:
-        #     metrics['Predictions'] = self.pred_probs
-        #     metrics['Labels'] = self.labels
-
         return metrics
 
     def reset(self):
-        """
-        Resets all metrics.
-        """
+        # Reset metrics
         for th in self.thresholds:
             self.precision[th].reset()
             self.recall[th].reset()
@@ -333,26 +328,12 @@ class FineTuningMetrics:
         self.pr_auc.reset()
         self.brier.reset()
         self.calibration_error.reset()
-        if self.store_predictions:
-            self.pred_probs = []
-            self.labels = []
-            self.additional_info = []
 
-    def write_predictions_to_csv(self, phase, epoch, fold, output_dir):
-        filename = (
-            f"fold_{fold}_phase_{phase:03d}_epoch_{epoch:03d}_predictions.csv"
-        )
-        os.makedirs(output_dir, exist_ok=True)
-        output_path = os.path.join(output_dir, filename)
-        with open(output_path, mode='w', newline='') as file:
-            writer = csv.writer(file)
-            writer.writerow([
-                'chr', 'pos', 'ref', 'alt', 'mapped_to_reverse', 'read_id',
-                'alpha', 'beta', 'label'
-            ])
-            for i, info in enumerate(self.additional_info):
-                writer.writerow(info + [self.labels[i]])
-        logging.info(f"Predictions written to {output_path}")
+        # If a CSV file is open, close it.
+        if self.csv_file is not None:
+            self.csv_file.close()
+            self.csv_file = None
+            self.csv_writer = None
 
 
 def compute_load_balance_loss(

@@ -20,10 +20,10 @@ MODEL_DIR="/lustre/scratch126/casm/team274sb/lp23/readformer/models"
 #PRETRAIN_DIR="${MODEL_DIR}/pretrained"
 
 CORES=12
-GPU_MEMORY=80000
-MEMORY=10240
+GPU_MEMORY=40000
+MEMORY=16384
 
-EPOCHS=3
+EPOCHS=2
 PHASES_PER_EPOCH=1  # Change this for fine-tuning, one phase is only suitable for fine-tuning from scratch.
 #LEARNING_RATE=3e-5  # finetune pretrained model
 LEARNING_RATE=3e-4  # finetune from scratch
@@ -34,15 +34,15 @@ PROJECT="no_pretrain"
 FOLD=0
 
 
-FINETUNE_DIR="${MODEL_DIR}/finetuned/${PROJECT}"
+FINETUNE_DIR="${MODEL_DIR}/finetune/${PROJECT}"
 mkdir -p ${FINETUNE_DIR}
 
 
-EMB_DIMS=( 512 256 )
-HEAD_NUMS=( 32  16 )
-LAYER_NUMS=( 4   1 )
-NUM_HYENAS=( 5   0 )
-NUM_ATTENS=( 1  24 )
+EMB_DIMS=( 512 256  256 )
+HEAD_NUMS=( 32  16   16 )
+LAYER_NUMS=( 4   1    4 )
+NUM_HYENAS=( 5   0    5 )
+NUM_ATTENS=( 1  24    1 )
 
 
 for i in "${!EMB_DIMS[@]}"; do
@@ -120,3 +120,14 @@ EOF
 
 done
 
+
+
+#bsub -J "debug_training" \
+#  -q gpu-normal \
+#  -m "farm22-gpu0203" \
+#  -M "16G" \
+#  -n 8 \
+#  -gpu "num=1:mode=exclusive_process:j_exclusive=yes:block=yes:gmem=40G" \
+#  -R "span[hosts=1] span[ptile=8]" \
+#  -R "select[mem>16G] rusage[mem=16G]" \
+#  -Is /bin/bash

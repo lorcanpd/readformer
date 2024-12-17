@@ -1,6 +1,6 @@
 #!/bin/bash
 
-LOG_DIR="logs/readwise_pretrain/"
+LOG_DIR="logs/pretrain/"
 
 mkdir -p ${LOG_DIR}
 
@@ -9,10 +9,10 @@ WANDB_API_KEY_PATH="/lustre/scratch126/casm/team274sb/lp23/.wandb_api"
 SIF="/nfs/users/nfs_l/lp23/sifs/readformer.sif"
 DATA_DIR="/lustre/scratch126/casm/team274sb/lp23/readformer/data/pretrain_bams"
 METADATA_PATH="/lustre/scratch126/casm/team274sb/lp23/readformer/data/pretrain_subsample_metadata.csv"
-MODEL_DIR="/lustre/scratch126/casm/team274sb/lp23/readformer/models/read_only_pretrain"
+MODEL_DIR="/lustre/scratch126/casm/team274sb/lp23/readformer/models"
 VAL_BATCH_DIR="/lustre/scratch126/casm/team274sb/lp23/readformer/data/validation_batch"
-GPU_MEMORY=61440
-MEMORY=8192
+GPU_MEMORY=80000
+MEMORY=16384
 MAX_ITERS=300000
 CORES=12
 #NUM_HYENA=3
@@ -21,7 +21,7 @@ NUM_ORDER=2
 KERNEL_SIZE=7
 #NUM_LAYERS=1
 MIN_READ_QUALITY=30
-BATCH_SIZE=128
+BATCH_SIZE=200
 #EMB_DIM=64
 MAX_SEQUENCE_LENGTH=100  # Single reads
 #EPOCHS_AT_INTERVAL=1
@@ -35,12 +35,13 @@ NAME="pretrain"
 
 PROJECT="pretrain"
 
+MODEL_SAVE_DIR="${MODEL_DIR}/${PROJECT}"
 
-EMB_DIMS=( 512 256 ) #512 )
-HEAD_NUMS=( 32  16 ) # 32 )
-LAYER_NUMS=( 4   4 ) #  1 )
-NUM_HYENAS=( 5   0 ) # 24 )
-NUM_ATTENS=( 1  6 ) #  0 )
+EMB_DIMS=( 512 256 256 )
+HEAD_NUMS=( 32  16  16 )
+LAYER_NUMS=( 4   1   4 )
+NUM_HYENAS=( 5   0   5 )
+NUM_ATTENS=( 1  24   1 )
 
 
 for i in "${!EMB_DIMS[@]}"; do
@@ -70,7 +71,7 @@ singularity exec --nv \
   --bind ${READFORMER_DIR}:/scripts/readformer \
   --bind ${DATA_DIR}:/data/pretrain/BAM \
   --bind ${METADATA_PATH}:/data/pretrain_metadata.csv \
-  --bind ${MODEL_DIR}:/models \
+  --bind ${MODEL_SAVE_DIR}:/models \
   --bind ${WANDB_API_KEY_PATH}:/home/wandb_api_key \
   --bind ${VAL_BATCH_DIR}:/nst_dir \
   --pwd /scripts/readformer \

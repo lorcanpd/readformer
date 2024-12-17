@@ -331,10 +331,10 @@ def main():
         thresholds=[round(x * 0.1, 1) for x in range(2, 8)],
         device=device
     )
-    epoch_train_metrics = FineTuningMetrics(
-        thresholds=[round(x * 0.1, 1) for x in range(1, 10)],
-        device=device
-    )
+    # epoch_train_metrics = FineTuningMetrics(
+    #     thresholds=[round(x * 0.1, 1) for x in range(1, 10)],
+    #     device=device
+    # )
     validation_metrics = FineTuningMetrics(
         thresholds=[round(x * 0.1, 1) for x in range(1, 10)],
         device=device, store_predictions=True
@@ -579,11 +579,11 @@ def main():
                     betas.detach(),
                     labels.detach().to(torch.int32)
                 )
-                epoch_train_metrics.update(
-                    alphas.detach(),
-                    betas.detach(),
-                    labels.detach().to(torch.int32)
-                )
+                # epoch_train_metrics.update(
+                #     alphas.detach(),
+                #     betas.detach(),
+                #     labels.detach().to(torch.int32)
+                # )
 
                 iter_train_metric_dict = iter_train_metrics.compute()
                 iter_train_metrics.reset()
@@ -651,6 +651,11 @@ def main():
                     classifier.eval()
                     ref_base_embedding.eval()
 
+                    validation_metrics.supply_phase(
+                        args.fold, phase_index, epoch,
+                        args.validation_output_dir
+                    )
+
                     with torch.no_grad():
                         for validation_batch in validation_dataset:
                             nucleotide_sequences = validation_batch['nucleotide_sequences'].to(device)
@@ -681,6 +686,7 @@ def main():
                             )
 
                             readformer_out = readformer_model(model_input, positions)
+                            reference_embs = ref_base_embedding(reference).squeeze(-2)
 
                             # Get indices of the mutation positions.
                             indices = torch.nonzero(positions == mutation_positions, as_tuple=True)
@@ -713,7 +719,8 @@ def main():
                             betas = betas.squeeze(-1)
 
                             validation_losses.append(
-                                loss_fn(alphas, betas, labels, loss_weight))
+                                loss_fn(alphas, betas, labels, loss_weight) * 10
+                            )
 
                             # convert labels tensor to torch.int32
                             validation_metrics.update(
@@ -725,13 +732,13 @@ def main():
                             )
 
                         validation_metric_dict = validation_metrics.compute()
-                        validation_metrics.write_predictions_to_csv(
-                            phase_index, epoch, args.fold,
-                            args.validation_output_dir
-                        )
+                        # validation_metrics.write_predictions_to_csv(
+                        #     phase_index, epoch, args.fold,
+                        #     args.validation_output_dir
+                        # )
                         validation_metrics.reset()
-                        epoch_train_metric_dict = epoch_train_metrics.compute()
-                        epoch_train_metrics.reset()
+                        # epoch_train_metric_dict = epoch_train_metrics.compute()
+                        # epoch_train_metrics.reset()
 
                         # Log the validation metrics
                         logging.info(
@@ -771,10 +778,10 @@ def main():
                                     continue
                                 log_entry[f"Validation {metric_name}"] = metric_value
 
-                            for metric_name, metric_value in epoch_train_metric_dict.items():
-                                if metric_name in ['Labels', 'Predictions']:
-                                    continue
-                                log_entry[f"Training {metric_name}"] = metric_value
+                            # for metric_name, metric_value in epoch_train_metric_dict.items():
+                            #     if metric_name in ['Labels', 'Predictions']:
+                            #         continue
+                            #     log_entry[f"Training {metric_name}"] = metric_value
 
                             try:
                                 labels = np.array(
@@ -795,8 +802,8 @@ def main():
 
                             log_entry["Validation Loss"] = torch.mean(
                                 torch.tensor(validation_losses)).item()
-                            log_entry["Training Loss"] = torch.mean(
-                                torch.tensor(epoch_loss)).item()
+                            # log_entry["Training Loss"] = torch.mean(
+                            #     torch.tensor(epoch_loss)).item()
 
                             wandb.log(
                                 log_entry
@@ -821,14 +828,9 @@ def main():
                 epoch += 1
                 i = 0
 
-
-
     if args.wandb:
         wandb.finish()
 
 
 if __name__ == '__main__':
     main()
-
-#  python finetune.py --emb_dim 128 --num_heads 8 --num_layers 1 --n_order 2 --kernel_size 7 --num_hyena 24 --num_attention 0 --readformer --checkpoint_path models/LOAD_FOR_TEST_emb128_lyrs1_num_hy24_num_att0_heads8.pth
-

@@ -17,32 +17,32 @@ ART_BAM="${BAM_DIR}/HG002_artefacts.bam"
 ART_BAI="${ART_BAM}.bai"
 
 MODEL_DIR="/lustre/scratch126/casm/team274sb/lp23/readformer/models"
-PRETRAIN_DIR="${MODEL_DIR}/pretrained"
+PRETRAIN_DIR="${MODEL_DIR}/pretrain"
 
 CORES=12
-GPU_MEMORY=80000
-MEMORY=10240
+GPU_MEMORY=40000
+MEMORY=16384
 
-EPOCHS=3
-PHASES_PER_EPOCH=6  # This means that the top 3/4 layers of a 24 layer model will be finetuned.
+EPOCHS=2
+PHASES_PER_EPOCH=9  # This means that the top 3/4 layers of a 24 layer model will be finetuned.
 LEARNING_RATE=3e-5  # finetune pretrained model
 #LEARNING_RATE=3e-4  # finetune from scratch
 BATCH_SIZE=200
 KERNEL_SIZE=7
 NUM_ORDER=2
-PROJECT="no_pretrain"
+PROJECT="with_pretrain"
 FOLD=0
 
 
-FINETUNE_DIR="${MODEL_DIR}/finetuned/${PROJECT}"
+FINETUNE_DIR="${MODEL_DIR}/finetune/${PROJECT}"
 mkdir -p ${FINETUNE_DIR}
 
 
-EMB_DIMS=( 512 256 )
-HEAD_NUMS=( 32  16 )
-LAYER_NUMS=( 4   1 )
-NUM_HYENAS=( 5   0 )
-NUM_ATTENS=( 1  24 )
+EMB_DIMS=( 512 256 256 )
+HEAD_NUMS=( 32  16  16 )
+LAYER_NUMS=( 4   1   4 )
+NUM_HYENAS=( 5   0   5 )
+NUM_ATTENS=( 1  24   1 )
 
 
 for i in "${!EMB_DIMS[@]}"; do
