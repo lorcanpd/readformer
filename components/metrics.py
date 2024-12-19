@@ -239,19 +239,18 @@ class FineTuningMetrics:
 
         self.reset()
 
-    def supply_phase(self, fold, phase, epoch, output_dir):
+    def supply_phase(self, fold, phase, output_dir):
         """
         Supply the phase details before starting validation for that phase.
         If store_predictions is True, open the CSV file here.
         """
         self.fold = fold
         self.phase = phase
-        self.epoch = epoch
         self.output_dir = output_dir
 
         if self.store_predictions:
             os.makedirs(self.output_dir, exist_ok=True)
-            filename = f"fold_{self.fold}_phase_{self.phase:03d}_epoch_{self.epoch:03d}_predictions.csv"
+            filename = f"fold_{self.fold}_phase_{self.phase:03d}_predictions.csv"
             output_path = os.path.join(self.output_dir, filename)
             self.csv_file = open(output_path, mode='w', newline='')
             self.csv_writer = csv.writer(self.csv_file)
@@ -377,3 +376,127 @@ def compute_load_balance_loss(
     return load_balance_loss
 
 
+class ValidationWriter:
+    """
+    A standalone class to handle writing validation results to a CSV file.
+
+    Attributes:
+        fold (int): The current fold number.
+        phase (int): The current validation phase.
+        output_dir (str): Directory where the CSV file will be saved.
+        csv_file (file object): The opened CSV file.
+        csv_writer (csv.writer): The CSV writer object.
+    """
+
+    def __init__(self, fold, phase, output_dir):
+        """
+        Initialises the ValidationWriter by setting up the CSV file.
+
+        Args:
+            fold (int): The current fold number.
+            phase (int): The current validation phase.
+            output_dir (str): Directory where the CSV file will be saved.
+        """
+        self.fold = fold
+        self.phase = phase
+        self.output_dir = output_dir
+        self.csv_file = None
+        self.csv_writer = None
+
+        # Initialise the CSV file
+        self._initialise_csv()
+
+    def _initialise_csv(self):
+        """
+        Creates the output directory and initialises the CSV file with headers.
+        """
+        os.makedirs(self.output_dir, exist_ok=True)
+        filename = f"fold_{self.fold}_phase_{self.phase:03d}_predictions.csv"
+        output_path = os.path.join(self.output_dir, filename)
+        self.csv_file = open(output_path, mode='w', newline='')
+        self.csv_writer = csv.writer(self.csv_file)
+        self.csv_writer.writerow([
+            'chr', 'pos', 'ref', 'alt', 'mapped_to_reverse', 'read_id',
+            'alpha', 'beta', 'label'
+        ])
+
+    def write(
+        self, alpha, beta, labels,
+        chr_=None, pos=None, ref=None, alt=None,
+        mapped_to_reverse=None, read_id=None
+    ):
+        """
+        Writes a batch of validation results to the CSV file.
+
+        Args:
+            alpha (torch.Tensor): Tensor of alpha parameters.
+            beta (torch.Tensor): Tensor of beta parameters.
+            labels (torch.Tensor): Tensor of true labels.
+            chr_ (list or None): List of chromosome identifiers.
+            pos (torch.Tensor or list or None): Tensor or list of positions.
+            ref (list or None): List of reference alleles.
+            alt (list or None): List of alternate alleles.
+            mapped_to_reverse (list or None): List indicating if mapped to reverse.
+            read_id (list or None): List of read identifiers.
+        """
+        # Move tensors to CPU and convert to NumPy arrays
+        alpha_np = alpha.detach().cpu().numpy()
+        beta_np = beta.detach().cpu().numpy()
+        labels_np = labels.detach().cpu().numpy()
+
+        batch_size = alpha_np.shape[0]
+
+        # Handle missing metadata by filling with default values
+        chr_ = chr_ if chr_ is not None else ['NA'] * batch_size
+        pos = pos if pos is not None else torch.zeros(batch_size)
+        if torch.is_tensor(pos):
+            pos = pos.detach().cpu().numpy()
+        # Flatten pos if it's a nested array
+        pos = pos.flatten().tolist()
+        ref = ref if ref is not None else ['N'] * batch_size
+        alt = alt if alt is not None else ['N'] * batch_size
+        mapped_to_reverse = mapped_to_reverse if mapped_to_reverse is not None else ['NA'] * batch_size
+        read_id = read_id if read_id is not None else ['NA'] * batch_size
+
+        # Ensure all metadata lists are of the correct length
+        assert len(chr_) == batch_size, "Length of 'chr_' does not match batch size."
+        assert len(pos) == batch_size, "Length of 'pos' does not match batch size."
+        assert len(ref) == batch_size, "Length of 'ref' does not match batch size."
+        assert len(alt) == batch_size, "Length of 'alt' does not match batch size."
+        assert len(mapped_to_reverse) == batch_size, "Length of 'mapped_to_reverse' does not match batch size."
+        assert len(read_id) == batch_size, "Length of 'read_id' does not match batch size."
+
+        # Write each sample in the batch to the CSV file
+        for i in range(batch_size):
+            self.csv_writer.writerow([
+                chr_[i],
+                pos[i],
+                ref[i],
+                alt[i],
+                mapped_to_reverse[i],
+                read_id[i],
+                alpha_np[i],
+                beta_np[i],
+                labels_np[i]
+            ])
+
+    def close(self):
+        """
+        Closes the CSV file if it is open.
+        """
+        if self.csv_file is not None:
+            self.csv_file.close()
+            self.csv_file = None
+            self.csv_writer = None
+
+    def __enter__(self):
+        """
+        Enables usage of the class with the 'with' statement.
+        """
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """
+        Ensures the CSV file is closed when exiting the 'with' block.
+        """
+        self.close()

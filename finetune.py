@@ -1,8 +1,6 @@
 import argparse
 import torch
 from torch.optim import AdamW
-import torch.nn as nn
-import torch.nn.functional as F
 from torch.optim.lr_scheduler import OneCycleLR
 import os
 import sys
@@ -11,9 +9,7 @@ import logging
 import wandb
 from tabulate import tabulate
 import multiprocessing as mp
-import numpy as np
 
-# Import the necessary modules from your components
 from components.base_model import Model
 from components.read_embedding import (
     InputEmbeddingLayer, NucleotideEmbeddingLayer)
@@ -22,8 +18,8 @@ from components.classification_head import BetaDistributionClassifier
 from components.utils import get_effective_number, get_layerwise_param_groups
 from components.metrics import (
     BetaBernoulliLoss, FineTuningMetrics, compute_load_balance_loss)
-# from components.scheduler import CosineAnnealingScheduler
 from pretrain_readwise_only import device_context, check_cuda_availability
+
 
 def get_args():
     parser = argparse.ArgumentParser(
@@ -82,8 +78,11 @@ def get_args():
         )
     )
     parser.add_argument(
-        '--finetune_save_path', type=str,
-        help='Path to save the fine-tuned model. Also used for checkpointing.',
+        '--finetune_save_dir', type=str,
+        help=(
+            'Directory in which to save the fine-tuned model. Also used for '
+            'checkpointing.'
+        ),
         required=True
     )
     parser.add_argument(
@@ -105,25 +104,21 @@ def get_args():
         '--fold', type=int, default=0,
         help='Fold number for cross-validation.'
     )
-    parser.add_argument(
-        '--validation_output_dir', type=str,
-        help='Directory to save validation tensors.', required=True
-    )
 
     parser.add_argument(
         '--max_read_length', type=int, default=100,
         help='Maximum read length to consider.'
     )
 
-    parser.add_argument(
-        '--num_workers', type=int, default=0,
-        help='Number of workers for data loading.'
-    )
-
-    parser.add_argument(
-        '--prefetch_factor', type=int, default=2,
-        help='Prefetch factor for data loading.'
-    )
+    # parser.add_argument(
+    #     '--num_workers', type=int, default=0,
+    #     help='Number of workers for data loading.'
+    # )
+    #
+    # parser.add_argument(
+    #     '--prefetch_factor', type=int, default=2,
+    #     help='Prefetch factor for data loading.'
+    # )
 
     parser.add_argument(
         '--wandb', action='store_true',
@@ -148,7 +143,7 @@ def get_args():
         '--phases_per_epoch', type=int, default=1,
         help=(
             'Number of phases to divide each epoch into. Each phase will have '
-            'its own annealing cycle and validation.'
+            'its own annealing cycle.'
         )
     )
 
@@ -169,7 +164,7 @@ def instantiate_model(args, device):
     ).to(device)
 
     return (
-         input_embedding, readformer_model
+        input_embedding, readformer_model
     )
 
 
@@ -199,11 +194,22 @@ def load_pretrained_model(args, device):
 
 def load_latest_checkpoint(args, device):
     # Load the latest checkpoint from the finetune save directory
-    if not os.path.isdir(args.finetune_save_path):
-        logging.error(f"No directory found at '{args.finetune_save_path}'")
+    if not os.path.isdir(args.finetune_save_dir):
+        # TODO: add phase number to the save name
+        logging.error(f"No directory found at '{args.finetune_save_dir}'")
         sys.exit(1)
 
-    latest_checkpoint = args.finetune_save_path
+    # models are saved in the format phase_{phase_index:03}.pth. Sort the files
+    # by phase index and get the latest one.
+    checkpoints = sorted(
+        [
+            f for f in os.listdir(args.finetune_save_dir)
+            if f.endswith('.pth')
+        ],
+        key=lambda x: int(x.split('_')[1].split('.')[0])
+    )
+
+    latest_checkpoint = os.path.join(args.finetune_save_dir, checkpoints[-1])
 
     if not os.path.isfile(latest_checkpoint):
         logging.error(f"No checkpoint found at '{latest_checkpoint}'")
@@ -331,14 +337,6 @@ def main():
         thresholds=[round(x * 0.1, 1) for x in range(2, 8)],
         device=device
     )
-    # epoch_train_metrics = FineTuningMetrics(
-    #     thresholds=[round(x * 0.1, 1) for x in range(1, 10)],
-    #     device=device
-    # )
-    validation_metrics = FineTuningMetrics(
-        thresholds=[round(x * 0.1, 1) for x in range(1, 10)],
-        device=device, store_predictions=True
-    )
 
     if args.load_latest_checkpoint:
         (
@@ -406,28 +404,9 @@ def main():
         max_read_length=args.max_read_length,
         shuffle=True,
         # num_workers=0,
-        num_workers=get_allocated_cpus() // 2,
-        prefetch_factor=1
+        num_workers=get_allocated_cpus() - 1,
+        prefetch_factor=2
 
-    )
-
-    validation_dataset = create_finetuning_dataloader(
-        csv_path=f'{args.finetune_metadata_dir}/test_fold_{args.fold}.csv',
-        artefact_bam_path=args.artefact_bam_path,
-        mutation_bam_path=args.mutation_bam_path,
-        batch_size=args.batch_size,
-        base_quality_pad_idx=input_embedding.base_quality_embeddings.padding_idx,
-        cigar_pad_idx=input_embedding.cigar_embeddings.padding_idx,
-        is_first_pad_idx=input_embedding.mate_pair_embeddings.padding_idx,
-        mapped_to_reverse_pad_idx=input_embedding.strand_embeddings.padding_idx,
-        position_pad_idx=-1,
-        # Only one epoch for validation but we need to loop through it after
-        # training epoch multiple times.
-        max_read_length=args.max_read_length,
-        shuffle=False,
-        # num_workers=0
-        num_workers=get_allocated_cpus() // 2,
-        prefetch_factor=1
     )
 
     iters_in_epoch = len(dataset)
@@ -440,12 +419,6 @@ def main():
     else:
         last_absolute_iter = last_absolute_iter % steps_per_phase
 
-    # scheduler = CosineAnnealingScheduler(
-    #     optimiser, steps_per_phase,
-    #     peak_pct=0.3, eta_min=1e-5,
-    #     last_epoch=last_absolute_iter,
-    #     max_lr=[group['lr'] for group in optimiser.param_groups]
-    # )
     max_lr_list = [group['lr'] for group in optimiser.param_groups]
     scheduler = OneCycleLR(
         optimiser, max_lr=max_lr_list, total_steps=steps_per_phase,
@@ -453,38 +426,11 @@ def main():
         last_epoch=last_absolute_iter
     )
 
-
-    # if args.pre_trained_path:
-    #     # freeze all pre-trained layers
-    #     for param in nucleotide_embeddings.parameters():
-    #         param.requires_grad = False
-    #     for param in cigar_embeddings.parameters():
-    #         param.requires_grad = False
-    #     for param in base_quality_embeddings.parameters():
-    #         param.requires_grad = False
-    #     for param in strand_embeddings.parameters():
-    #         param.requires_grad = False
-    #     for param in mate_pair_embeddings.parameters():
-    #         param.requires_grad = False
-    #     for param in gate_projection.parameters():
-    #         param.requires_grad = False
-    #     for param in feature_projection.parameters():
-    #         param.requires_grad = False
-    #     for param in readformer_model.parameters():
-    #         param.requires_grad = False
-
-    best_validation_loss = float('inf')
     for epoch in range(start_epoch, args.epochs):
 
         for batch in dataset:
 
             if i % steps_per_phase == 0:
-                # scheduler = CosineAnnealingScheduler(
-                #     optimiser, steps_per_phase,
-                #     peak_pct=0.3, eta_min=1e-5,
-                #     last_epoch=-1,
-                #     max_lr=[group['lr'] for group in optimiser.param_groups]
-                # )
                 scheduler = OneCycleLR(
                     optimiser, max_lr=max_lr_list, total_steps=steps_per_phase,
                     pct_start=0.3, anneal_strategy='cos', cycle_momentum=False,
@@ -554,8 +500,6 @@ def main():
                     reference_embs
                 )
 
-
-
                 eff_class_num = get_effective_number(num_in_class)
                 eff_mut_num = get_effective_number(read_support)
                 loss_weight = 1 / (eff_class_num * eff_mut_num + 1e-12)
@@ -579,11 +523,6 @@ def main():
                     betas.detach(),
                     labels.detach().to(torch.int32)
                 )
-                # epoch_train_metrics.update(
-                #     alphas.detach(),
-                #     betas.detach(),
-                #     labels.detach().to(torch.int32)
-                # )
 
                 iter_train_metric_dict = iter_train_metrics.compute()
                 iter_train_metrics.reset()
@@ -636,193 +575,32 @@ def main():
                     wandb.log(
                         {
                             "iter_loss": loss,
-                            "iter_largest_lr": max(scheduler.get_lr())
+                            "iter_largest_lr": max(scheduler.get_lr()),
+                            "Calibration Error (ECE)": iter_train_metric_dict['Calibration Error (ECE)'],
+                            "Brier Score": iter_train_metric_dict['Brier Score'],
+                            "ROC AUC": iter_train_metric_dict['ROC AUC'],
+                            "PR AUC": iter_train_metric_dict['PR AUC']
                         }
                     )
 
                 i += 1
 
                 if i > 0 and (i % steps_per_phase == 0):
-
-                    validation_losses = []
-                    # turn off dropouts for all layers during validation
-                    input_embedding.eval()
-                    readformer_model.eval()
-                    classifier.eval()
-                    ref_base_embedding.eval()
-
-                    validation_metrics.supply_phase(
-                        args.fold, phase_index, epoch,
-                        args.validation_output_dir
-                    )
-
-                    with torch.no_grad():
-                        for validation_batch in validation_dataset:
-                            nucleotide_sequences = validation_batch['nucleotide_sequences'].to(device)
-                            base_qualities = validation_batch['base_qualities'].to(device)
-                            cigar_encoding = validation_batch['cigar_encoding'].to(device)
-                            is_first = validation_batch['is_first'].to(device)
-                            mapped_to_reverse = validation_batch['mapped_to_reverse'].to(device)
-                            positions = validation_batch['positions'].to(device)
-                            read_support = validation_batch['read_support'].to(device)
-                            num_in_class = validation_batch['num_in_class'].to(device)
-                            labels = validation_batch['labels'].to(device)
-                            reference = validation_batch['reference'].to(device)
-                            mutation_positions = validation_batch['mut_pos'].to(device)
-                            mutation_positions = torch.unsqueeze(mutation_positions, -1)
-
-                            chr_ = validation_batch['chr']
-                            read_id = validation_batch['read_id']
-                            ref = validation_batch['ref']
-                            alt = validation_batch['alt']
-                            is_reverse = validation_batch['is_reverse']
-
-                            del validation_batch
-
-                            model_input = input_embedding(
-                                nucleotide_sequences, cigar_encoding,
-                                base_qualities,
-                                mapped_to_reverse, is_first
-                            )
-
-                            readformer_out = readformer_model(model_input, positions)
-                            reference_embs = ref_base_embedding(reference).squeeze(-2)
-
-                            # Get indices of the mutation positions.
-                            indices = torch.nonzero(positions == mutation_positions, as_tuple=True)
-
-                            if indices[0].shape != args.batch_size:
-                                # Figure out which sequence is missing
-                                missing_indices = torch.tensor(
-                                    list(set(range(args.batch_size)) - set(indices[0].tolist())))
-                                remaining_indices = torch.tensor(
-                                    list(set(range(args.batch_size)) - set(missing_indices.tolist())))
-
-                                # keep references and labels of the remaining sequences
-                                reference_embs = reference_embs[remaining_indices]
-                                labels = labels[remaining_indices]
-                                read_support = read_support[remaining_indices]
-                                num_in_class = num_in_class[remaining_indices]
-
-                            classifier_in = readformer_out[indices]
-
-                            alphas, betas, _, _ = classifier(
-                                classifier_in,
-                                reference_embs
-                            )
-
-                            eff_class_num = get_effective_number(num_in_class)
-                            eff_mut_num = get_effective_number(read_support)
-                            loss_weight = 1 / (eff_class_num * eff_mut_num + 1e-12)
-
-                            alphas = alphas.squeeze(-1)
-                            betas = betas.squeeze(-1)
-
-                            validation_losses.append(
-                                loss_fn(alphas, betas, labels, loss_weight) * 10
-                            )
-
-                            # convert labels tensor to torch.int32
-                            validation_metrics.update(
-                                alphas.detach(),
-                                betas.detach(),
-                                labels.detach().to(torch.int32),
-                                chr_, mutation_positions, ref, alt, is_reverse,
-                                read_id
-                            )
-
-                        validation_metric_dict = validation_metrics.compute()
-                        # validation_metrics.write_predictions_to_csv(
-                        #     phase_index, epoch, args.fold,
-                        #     args.validation_output_dir
-                        # )
-                        validation_metrics.reset()
-                        # epoch_train_metric_dict = epoch_train_metrics.compute()
-                        # epoch_train_metrics.reset()
-
-                        # Log the validation metrics
-                        logging.info(
-                            f"Validation metrics after phase {phase_index} "
-                            f"(There are {args.phases_per_epoch} phases per "
-                            f"epoch. This is epoch {epoch}):"
-                        )
-                        table_data = []
-                        for key in validation_metrics.thresholds:
-                            table_data.append([
-                                key,
-                                validation_metric_dict[f'Precision@{key}'],
-                                validation_metric_dict[f'Recall@{key}'],
-                                validation_metric_dict[f'F1-Score@{key}']
-                            ])
-
-                        # Define the table headers
-                        headers = ["Threshold", "Precision", "Recall", "F1"]
-
-                        # Log the table
-                        logging.info(
-                            "\n" + tabulate(table_data, headers=headers, floatfmt=".5f"))
-                        logging.info(f"ROC AUC: {validation_metric_dict['ROC AUC']:.5f}")
-                        logging.info(f"PR AUC: {validation_metric_dict['PR AUC']:.5f}")
-                        logging.info(
-                            f"Brier Score: {validation_metric_dict['Brier Score']:.5f}")
-                        logging.info(
-                            f"Calibration Error (ECE): "
-                            f"{validation_metric_dict['Calibration Error (ECE)']:.5f}"
-                            f"\n\n"
-                        )
-
-                        if args.wandb:
-                            log_entry = {}
-                            for metric_name, metric_value in validation_metric_dict.items():
-                                if metric_name in ['Labels', 'Predictions']:
-                                    continue
-                                log_entry[f"Validation {metric_name}"] = metric_value
-
-                            # for metric_name, metric_value in epoch_train_metric_dict.items():
-                            #     if metric_name in ['Labels', 'Predictions']:
-                            #         continue
-                            #     log_entry[f"Training {metric_name}"] = metric_value
-
-                            try:
-                                labels = np.array(
-                                    validation_metric_dict['Labels'])
-                                predictions = np.array(
-                                    validation_metric_dict['Predictions'])
-                                y_probas = np.stack(
-                                    [1 - predictions, predictions], axis=1)
-
-                                log_entry["Validation ROC Curve"] = wandb.plot.roc_curve(
-                                    labels, y_probas
-                                )
-                                log_entry["Validation PR Curve"] = wandb.plot.pr_curve(
-                                    labels, y_probas
-                                )
-                            except Exception as e:
-                                logging.error(f"Error plotting ROC/PR curve: {e}")
-
-                            log_entry["Validation Loss"] = torch.mean(
-                                torch.tensor(validation_losses)).item()
-                            # log_entry["Training Loss"] = torch.mean(
-                            #     torch.tensor(epoch_loss)).item()
-
-                            wandb.log(
-                                log_entry
-                            )
-
-                        # Save the model checkpoint, should save everything loaded by the
-                        # load_latest_checkpoint function.
-                        update = {
-                            'input_embedding_state_dict': input_embedding.state_dict(),
-                            'model_state_dict': readformer_model.state_dict(),
-                            'ref_base_embedding_state_dict': ref_base_embedding.state_dict(),
-                            'classifier_state_dict': classifier.state_dict(),
-                            'optimiser_state_dict': optimiser.state_dict(),
-                            'epoch': epoch,
-                            'iteration': i
-                        }
-                        torch.save(update, args.finetune_save_path)
-                        if args.wandb:
-                            wandb.save(args.finetune_save_path)
+                    # Save the model checkpoint, should save everything loaded by the
+                    # load_latest_checkpoint function.
+                    update = {
+                        'input_embedding_state_dict': input_embedding.state_dict(),
+                        'model_state_dict': readformer_model.state_dict(),
+                        'ref_base_embedding_state_dict': ref_base_embedding.state_dict(),
+                        'classifier_state_dict': classifier.state_dict(),
+                        'optimiser_state_dict': optimiser.state_dict(),
+                        'epoch': epoch,
+                        'iteration': i
+                    }
+                    path = f"{args.finetune_save_dir}/phase_{phase_index:03}.pth"
+                    torch.save(update, path)
+                    if args.wandb:
+                        wandb.save(path)
 
             if i == iters_in_epoch:
                 epoch += 1

@@ -23,18 +23,15 @@ CORES=12
 GPU_MEMORY=40000
 MEMORY=8192
 
-EPOCHS=2
-PHASES_PER_EPOCH=1  # Change this for fine-tuning, one phase is only suitable for fine-tuning from scratch.
-#LEARNING_RATE=3e-5  # finetune pretrained model
-LEARNING_RATE=1e-4  # finetune from scratch
 BATCH_SIZE=200
 KERNEL_SIZE=7
 NUM_ORDER=2
 PROJECT="no_pretrain"
 FOLD=0
-LOG_DIR="logs/finetuning/${PROJECT}/fold_${FOLD}"
-
+LOG_DIR="logs/finetune/${PROJECT}/fold_${FOLD}"
 mkdir -p ${LOG_DIR}
+
+
 
 #EMB_DIMS=( 512 256  256 )
 #HEAD_NUMS=( 32  16   16 )
@@ -109,18 +106,15 @@ singularity exec --nv \
     --kernel_size ${KERNEL_SIZE} \
     --num_hyena ${NUM_HYENA} \
     --num_attention ${NUM_ATTENTION} \
-    --epochs ${EPOCHS} \
-    --base_lr ${LEARNING_RATE} \
     --batch_size ${BATCH_SIZE} \
-    --phases_per_epoch ${PHASES_PER_EPOCH} \
     --readformer \
     --finetune_save_dir /models \
     --finetune_metadata_dir /data/pretrain/VCF \
     --mutation_bam_path /data/pretrain/BAM/mutation_reads.bam \
     --artefact_bam_path /data/pretrain/BAM/HG002_artefacts.bam \
     --fold ${FOLD} \
-    --wandb \
-    --wandb_api_path /home/wandb_api_key
+    --validation_output_dir /nst_dir
+
 EOF
   )
   if [[ -z "${job_id}" ]]; then
@@ -132,14 +126,3 @@ EOF
 
 done
 
-
-
-#bsub -J "debug_training" \
-#  -q gpu-normal \
-#  -m "farm22-gpu0203" \
-#  -M "16G" \
-#  -n 8 \
-#  -gpu "num=1:mode=exclusive_process:j_exclusive=yes:block=yes:gmem=40G" \
-#  -R "span[hosts=1] span[ptile=8]" \
-#  -R "select[mem>16G] rusage[mem=16G]" \
-#  -Is /bin/bash
