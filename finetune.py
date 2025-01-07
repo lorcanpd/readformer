@@ -404,8 +404,8 @@ def main():
         max_read_length=args.max_read_length,
         shuffle=True,
         # num_workers=0,
-        num_workers=get_allocated_cpus() - 1,
-        prefetch_factor=2
+        num_workers=min(get_allocated_cpus() - 1, 8),
+        prefetch_factor=1
 
     )
 
@@ -453,7 +453,7 @@ def main():
             classifier.train()
             ref_base_embedding.train()
 
-            epoch_loss = []
+            # epoch_loss = []
             nucleotide_sequences = batch['nucleotide_sequences'].to(device)
             base_qualities = batch['base_qualities'].to(device)
             cigar_encoding = batch['cigar_encoding'].to(device)
@@ -537,7 +537,7 @@ def main():
 
                 # Compute the loss
                 loss = loss.item()
-                epoch_loss.append(loss)
+                # epoch_loss.append(loss)
 
                 # Log the training metrics
                 logging.debug(f"Training metrics after at epoch {epoch} iteration {i}:")

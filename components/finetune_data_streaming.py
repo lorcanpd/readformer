@@ -191,27 +191,6 @@ def collate_fn(batch):
     return batch
 
 
-# class EpochSampler(Sampler):
-#
-#     def __init__(self, data_source, num_epochs, shuffle=True):
-#         super().__init__(data_source)
-#         self.data_source = data_source
-#         self.num_epochs = num_epochs
-#         self.shuffle = shuffle
-#
-#     def __iter__(self):
-#         indices = list(range(len(self.data_source)))
-#         for _ in range(self.num_epochs):
-#             if self.shuffle:
-#                 torch.manual_seed(torch.initial_seed())
-#                 indices = torch.randperm(len(self.data_source)).tolist()
-#             for idx in indices:
-#                 yield idx
-#
-#     def __len__(self):
-#         return len(self.data_source) * self.num_epochs
-
-
 def create_finetuning_dataloader(
         csv_path, artefact_bam_path, mutation_bam_path, batch_size,
         base_quality_pad_idx, cigar_pad_idx,

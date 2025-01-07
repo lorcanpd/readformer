@@ -2,6 +2,9 @@ import os
 import pandas as pd
 import numpy as np
 from sklearn.mixture import GaussianMixture
+# ensure matplot lib can make plots on the server
+import matplotlib
+matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import seaborn as sns
 import logging
@@ -164,9 +167,10 @@ class EmpiricalBayes:
         logging.info(f"Identified null component: {null_component}, alt component: {alt_component}")
 
         # Clean up
-        del z_scores_reshaped, sampled_z_scores
+        del z_scores_reshaped
         if self.sample_size:
             del sampled_indices
+            del sampled_z_scores
 
         gc.collect()
 
@@ -238,8 +242,8 @@ class EmpiricalBayes:
             precision, recall, f_score, specificity = self.compute_metrics(labels, preds)
 
             logging.info(
-                f"Metrics at threshold {chosen_z_threshold:.3f} - Precision: {precision:.3f}, "
-                f"Recall: {recall:.3f}, F1-Score: {f_score:.3f}, Specificity: {specificity:.3f}"
+                f"Metrics at threshold {chosen_z_threshold:.4f} - Precision: {precision:.4f}, "
+                f"Recall: {recall:.4f}, F1-Score: {f_score:.4f}, Specificity: {specificity:.4f}"
             )
 
             # Clean up
@@ -297,10 +301,10 @@ class EmpiricalBayes:
             ax.axvline(x=chosen_z_threshold, color='red', linestyle='--', linewidth=2,
                        label=f"Threshold (z={chosen_z_threshold:.2f})", zorder=10)
             annotation_text = (
-                f"FDR={self.desired_fdr:.2f}\n"
-                f"z={chosen_z_threshold:.2f}\n"
-                f"Prec={precision:.2f}, Recall={recall:.2f}, F1={f_score:.2f}\n"
-                f"Spec={specificity:.2f}"
+                f"FDR={self.desired_fdr:.3f}\n"
+                f"z={chosen_z_threshold:.3f}\n"
+                f"Prec={precision:.3f}, Recall={recall:.3f}, F1={f_score:.3f}\n"
+                f"Spec={specificity:.3f}"
             )
             ax.text(
                 chosen_z_threshold, ax.get_ylim()[1] * 0.9, annotation_text,

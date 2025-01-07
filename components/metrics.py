@@ -451,8 +451,12 @@ class ValidationWriter:
         pos = pos if pos is not None else torch.zeros(batch_size)
         if torch.is_tensor(pos):
             pos = pos.detach().cpu().numpy()
-        # Flatten pos if it's a nested array
-        pos = pos.flatten().tolist()
+            # Flatten pos if it's a nested array
+            pos = pos.flatten().tolist()
+        # pos is list of lists, flatten it
+        if isinstance(pos[0], list):
+            pos = [item for sublist in pos for item in sublist]
+
         ref = ref if ref is not None else ['N'] * batch_size
         alt = alt if alt is not None else ['N'] * batch_size
         mapped_to_reverse = mapped_to_reverse if mapped_to_reverse is not None else ['NA'] * batch_size
