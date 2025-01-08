@@ -27,6 +27,12 @@ def get_args():
         '--random_seed', type=int, default=42,
         help='Random seed for reproducibility.'
     )
+    parser.add_argument(
+        "--with_ground_truth", action="store_true",
+        help=(
+            "Whether to use ground truth labels for validation. Otherwise model "
+            "performs naive estimation without validation.")
+    )
 
     return parser.parse_args()
 
@@ -40,7 +46,7 @@ def main():
         [
             f for f in os.listdir(args.validation_output_dir)
             if f.startswith(f"fold_{args.fold}")
-                and f.endswith("predictions.csv")
+            and f.endswith("predictions.csv")
         ]
     )
 
@@ -52,7 +58,8 @@ def main():
             validation_output_dir=args.validation_output_dir,
             desired_fdr=args.desired_fdr,
             sample_size=args.sample_size,
-            random_state=args.random_seed
+            random_state=args.random_seed,
+            with_ground_truth=args.with_ground_truth
         )
 
         # Run the Empirical Bayes analysis

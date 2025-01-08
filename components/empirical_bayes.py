@@ -4,11 +4,12 @@ import numpy as np
 from sklearn.mixture import GaussianMixture
 # ensure matplot lib can make plots on the server
 import matplotlib
-matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import seaborn as sns
 import logging
 import gc  # Garbage Collector for memory management
+
+matplotlib.use('Agg')
 
 
 class EmpiricalBayes:
@@ -18,7 +19,10 @@ class EmpiricalBayes:
     and generate corresponding visualizations and summary statistics.
     """
 
-    def __init__(self, fold, phase_index, validation_output_dir, desired_fdr=0.01, sample_size=None, random_state=42):
+    def __init__(
+            self, fold, phase_index, validation_output_dir, desired_fdr=0.01,
+            sample_size=None, random_state=42, with_ground_truth=False
+    ):
         """
         Initializes the EmpiricalBayes instance with necessary parameters.
 
@@ -38,6 +42,7 @@ class EmpiricalBayes:
         self.desired_fdr = desired_fdr
         self.sample_size = sample_size
         self.random_state = random_state
+        self.with_ground_truth = with_ground_truth
 
         # Construct the prediction file path
         self.prediction_filename = f"fold_{self.fold}_phase_{self.phase_index:03d}_predictions.csv"
@@ -57,13 +62,17 @@ class EmpiricalBayes:
             format='%(asctime)s - %(levelname)s - %(message)s',
             handlers=[
                 logging.StreamHandler(),
-                logging.FileHandler(os.path.join(self.validation_output_dir,
-                                                f"empirical_bayes_fold_{self.fold}_phase_{self.phase_index:03d}.log"))
+                logging.FileHandler(os.path.join(
+                    self.validation_output_dir,
+                    f"empirical_bayes_fold_{self.fold}_"
+                    f"phase_{self.phase_index:03d}.log"
+                ))
             ]
         )
-        logging.info("Initialized EmpiricalBayes instance.")
+        logging.info("Initialised EmpiricalBayes instance.")
 
-    def compute_metrics(self, labels, preds):
+    @staticmethod
+    def compute_metrics(labels, preds):
         """
         Computes precision, recall, F1-score, and specificity.
 
@@ -209,79 +218,100 @@ class EmpiricalBayes:
         gc.collect()
         return lfdr
 
-    def determine_threshold(self, z_scores, lfdr):
+    def _determine_threshold_from_lfdr(self, z_scores, lfdr):
         """
-        Determines the z-score threshold corresponding to the desired FDR.
-
-        Args:
-            z_scores (np.ndarray): Array of z-scores.
-            lfdr (np.ndarray): Array of local FDR values.
-
-        Returns:
-            tuple: (chosen_z_threshold, precision, recall, f_score, specificity)
+        Determine the z-score threshold purely based on desired FDR,
+        using local FDR (no ground truth needed).
         """
-        # Sort by z-score descending
         sort_idx = np.argsort(z_scores)[::-1]
         sorted_lfdr = lfdr[sort_idx]
         cumulative_error_rate = np.cumsum(sorted_lfdr) / np.arange(1, len(sorted_lfdr) + 1)
 
-        # Find the largest index where cumulative_error_rate <= desired_fdr
         below_threshold = cumulative_error_rate <= self.desired_fdr
         if np.any(below_threshold):
             chosen_threshold_index = np.where(below_threshold)[0][-1]
             chosen_z_threshold = z_scores[sort_idx[chosen_threshold_index]]
-            logging.info(f"Chosen z-threshold for FDR={self.desired_fdr}: {chosen_z_threshold:.3f}")
-
-            # Compute predictions based on the threshold
-            preds = (z_scores > chosen_z_threshold).astype(bool)  # Boolean array
-
-            # Retrieve corresponding labels from the stored DataFrame
-            labels = self.df["label"].values
-
-            # Compute metrics
-            precision, recall, f_score, specificity = self.compute_metrics(labels, preds)
-
             logging.info(
-                f"Metrics at threshold {chosen_z_threshold:.4f} - Precision: {precision:.4f}, "
-                f"Recall: {recall:.4f}, F1-Score: {f_score:.4f}, Specificity: {specificity:.4f}"
-            )
-
-            # Clean up
-            del sort_idx, sorted_lfdr, cumulative_error_rate, below_threshold, chosen_threshold_index, preds, labels
-            gc.collect()
-
-            return chosen_z_threshold, precision, recall, f_score, specificity
+                f"Chosen z-threshold for FDR={self.desired_fdr}: "
+                f"{chosen_z_threshold:.3f}")
+            return chosen_z_threshold
         else:
-            logging.warning(f"No threshold found that achieves FDR={self.desired_fdr}.")
-            return None, None, None, None, None
+            logging.warning(
+                f"No threshold found that achieves FDR={self.desired_fdr}.")
+            return None
 
-    def plot_histogram(self, df, z_scores, gmm, null_component, chosen_z_threshold, precision, recall, f_score, specificity):
+    def _save_updated_csv(self, df, chosen_z_threshold):
         """
-        Plots and saves the z-score distribution with GMM components and threshold.
+        Saves the updated CSV with z_score, lfdr, and called_mutation.
+        """
+        if "z_score" not in df.columns or "lfdr" not in df.columns:
+            logging.error(
+                "z_score and/or lfdr columns are missing from the DataFrame.")
+            raise ValueError(
+                "z_score and/or lfdr columns are missing from the DataFrame.")
 
-        Args:
-            df (pd.DataFrame): The prediction DataFrame.
-            z_scores (np.ndarray): Array of z-scores.
-            gmm (GaussianMixture): The fitted GaussianMixture.
-            null_component (int): Index of the null component.
-            chosen_z_threshold (float): The chosen z-score threshold.
-            precision (float): Precision at the threshold.
-            recall (float): Recall at the threshold.
-            f_score (float): F1-score at the threshold.
-            specificity (float): Specificity at the threshold.
+        if chosen_z_threshold is not None:
+            df["called_mutation"] = df["z_score"] > chosen_z_threshold
+        else:
+            df["called_mutation"] = False
+
+        updated_filename = f"fold_{self.fold}_phase_{self.phase_index:03d}_epoch_{self.phase_index:03d}_predictions_with_zlfdr.csv"
+        updated_path = os.path.join(self.validation_output_dir, updated_filename)
+        df.to_csv(updated_path, index=False)
+        logging.info(f"Saved updated predictions to '{updated_path}'.")
+
+    def _save_results(self, chosen_z_threshold, precision, recall, f_score, specificity):
+        """
+        Saves threshold + metrics (if computed) to CSV. If with_ground_truth=False,
+        metrics might be None or omitted.
+        """
+        results = {
+            'fold': self.fold,
+            'phase': self.phase_index,
+            'desired_fdr': self.desired_fdr,
+            'chosen_z_threshold': chosen_z_threshold,
+            'precision': precision if precision is not None else "",
+            'recall': recall if recall is not None else "",
+            'f1_score': f_score if f_score is not None else "",
+            'specificity': specificity if specificity is not None else ""
+        }
+        results_df = pd.DataFrame([results])
+        results_df.to_csv(self.results_path, index=False)
+        logging.info(f"Saved summary results to '{self.results_path}'.")
+
+    def _plot_histogram(
+            self, df, z_scores, gmm, null_component,
+            chosen_z_threshold, precision, recall, f_score, specificity
+    ):
+        """
+        Plots the z-score distribution. If with_ground_truth=True,
+        we show a stacked histogram by label. Otherwise, just a single histogram of z-scores.
         """
         plt.figure(figsize=(10, 7))
-        ax = sns.histplot(
-            data=df,
-            x='z_score',
-            hue='label',
-            bins=50,
-            multiple='stack',
-            stat='density',
-            edgecolor='none',
-            alpha=0.7
-        )
 
+        # Conditionally hue by label if ground truth is available
+        if self.with_ground_truth and 'label' in df.columns:
+            ax = sns.histplot(
+                data=df,
+                x='z_score',
+                hue='label',
+                bins=50,
+                multiple='stack',
+                stat='density',
+                edgecolor='none',
+                alpha=0.7
+            )
+        else:
+            ax = sns.histplot(
+                data=df,
+                x='z_score',
+                bins=50,
+                stat='density',
+                edgecolor='none',
+                alpha=0.7
+            )
+
+        # Plot mixture components
         x = np.linspace(z_scores.min(), z_scores.max(), 1000)
         mixture_pdf = np.zeros_like(x)
         means = gmm.means_.flatten()
@@ -297,25 +327,42 @@ class EmpiricalBayes:
 
         ax.plot(x, mixture_pdf, 'k--', linewidth=2, label="Mixture", zorder=5)
 
+        # Plot threshold & metrics annotation if threshold is found
         if chosen_z_threshold is not None:
-            ax.axvline(x=chosen_z_threshold, color='red', linestyle='--', linewidth=2,
-                       label=f"Threshold (z={chosen_z_threshold:.2f})", zorder=10)
-            annotation_text = (
-                f"FDR={self.desired_fdr:.3f}\n"
-                f"z={chosen_z_threshold:.3f}\n"
-                f"Prec={precision:.3f}, Recall={recall:.3f}, F1={f_score:.3f}\n"
-                f"Spec={specificity:.3f}"
-            )
-            ax.text(
-                chosen_z_threshold, ax.get_ylim()[1] * 0.9, annotation_text,
-                rotation=90, verticalalignment='top', horizontalalignment='center',
-                color='red', fontsize=10,
-                bbox=dict(facecolor='white', alpha=0.7, edgecolor='red')
-            )
+            ax.axvline(
+                x=chosen_z_threshold, color='red', linestyle='--', linewidth=2,
+                label=f"Threshold (z={chosen_z_threshold:.2f})", zorder=10)
+
+            # If with_ground_truth, we annotate metrics
+            if self.with_ground_truth and precision is not None:
+                annotation_text = (
+                    f"FDR={self.desired_fdr:.4f}\n"
+                    f"z={chosen_z_threshold:.4f}\n"
+                    f"Prec={precision:.4f}, Recall={recall:.4f}, F1={f_score:.4f}\n"
+                    f"Spec={specificity:.4f}"
+                )
+                ax.text(
+                    chosen_z_threshold, ax.get_ylim()[1] * 0.9, annotation_text,
+                    rotation=90, verticalalignment='top', horizontalalignment='center',
+                    color='red', fontsize=10,
+                    bbox=dict(facecolor='white', alpha=0.7, edgecolor='red')
+                )
+            else:
+                # If no ground truth, at least show the FDR & threshold
+                annotation_text = f"FDR={self.desired_fdr:.3f}\nz={chosen_z_threshold:.3f}"
+                ax.text(
+                    chosen_z_threshold, ax.get_ylim()[1] * 0.9, annotation_text,
+                    rotation=90, verticalalignment='top', horizontalalignment='center',
+                    color='red', fontsize=10,
+                    bbox=dict(facecolor='white', alpha=0.7, edgecolor='red')
+                )
 
         ax.set_xlabel("Z-score")
         ax.set_ylabel("Density")
-        ax.set_title("Z-score Distribution with Stacked Histogram by Class and Fitted Mixture")
+        title_str = "Z-score Distribution with Fitted Mixture"
+        if self.with_ground_truth:
+            title_str += " (Stacked by Label)"
+        ax.set_title(title_str)
         handles, labels_legend = ax.get_legend_handles_labels()
         ax.legend(handles, labels_legend, loc='upper right')
 
@@ -323,67 +370,6 @@ class EmpiricalBayes:
         plt.savefig(self.plot_path)
         plt.close()
         logging.info(f"Saved histogram plot to '{self.plot_path}'.")
-
-    def save_updated_csv(self, df, chosen_z_threshold):
-        """
-        Saves the updated predictions CSV with z-score, lfdr, and called_mutation columns.
-
-        Args:
-            df (pd.DataFrame): The original prediction DataFrame.
-            chosen_z_threshold (float): The chosen z-score threshold.
-        """
-        if "z_score" not in df.columns or "lfdr" not in df.columns:
-            logging.error("z_score and/or lfdr columns are missing from the DataFrame.")
-            raise ValueError("z_score and/or lfdr columns are missing from the DataFrame.")
-
-        if chosen_z_threshold is not None:
-            df["called_mutation"] = df["z_score"] > chosen_z_threshold  # Boolean column
-        else:
-            df["called_mutation"] = False  # Default to False if no threshold was determined
-
-        updated_filename = f"fold_{self.fold}_phase_{self.phase_index:03d}_epoch_{self.phase_index:03d}_predictions_with_zlfdr.csv"
-        updated_path = os.path.join(self.validation_output_dir, updated_filename)
-
-        try:
-            df.to_csv(updated_path, index=False)
-            logging.info(f"Saved updated predictions with z-score, lfdr, and called_mutation to '{updated_path}'.")
-        except Exception as e:
-            logging.error(f"Error saving updated CSV: {e}")
-            raise e
-
-    def save_results(self, chosen_z_threshold, precision, recall, f_score, specificity):
-        """
-        Saves the summary metrics and threshold information to a results CSV.
-
-        Args:
-            chosen_z_threshold (float): The chosen z-score threshold.
-            precision (float): Precision at the threshold.
-            recall (float): Recall at the threshold.
-            f_score (float): F1-score at the threshold.
-            specificity (float): Specificity at the threshold.
-        """
-        if chosen_z_threshold is None:
-            logging.warning("No threshold was determined. Skipping results saving.")
-            return
-
-        results = {
-            'fold': self.fold,
-            'phase': self.phase_index,
-            'desired_fdr': self.desired_fdr,
-            'chosen_z_threshold': chosen_z_threshold,
-            'precision': precision,
-            'recall': recall,
-            'f1_score': f_score,
-            'specificity': specificity
-        }
-
-        results_df = pd.DataFrame([results])
-        try:
-            results_df.to_csv(self.results_path, index=False)
-            logging.info(f"Saved summary results to '{self.results_path}'.")
-        except Exception as e:
-            logging.error(f"Error saving results CSV: {e}")
-            raise e
 
     def run(self):
         """
@@ -407,20 +393,47 @@ class EmpiricalBayes:
             df['lfdr'] = lfdr
 
             # Step 5: Determine threshold and compute metrics
-            chosen_z_threshold, precision, recall, f_score, specificity = self.determine_threshold(z_scores, lfdr)
+            if self.with_ground_truth and 'label' not in df.columns:
+                logging.error(
+                    "Ground truth labels are required for threshold "
+                    "determination."
+                )
+                raise ValueError(
+                    "Ground truth labels are required for threshold "
+                    "determination (add 'label' column)."
+                )
+
+            chosen_z_threshold, precision, recall, f_score, specificity = (None,) * 5
+            chosen_z_threshold = self._determine_threshold_from_lfdr(z_scores, lfdr)
+
+            if chosen_z_threshold is not None and self.with_ground_truth:
+                labels = df["label"].values
+                preds = (z_scores > chosen_z_threshold).astype(int)
+                precision, recall, f_score, specificity = self.compute_metrics(labels, preds)
 
             # Step 6: Add 'called_mutation' column and save updated CSV
-            self.save_updated_csv(df, chosen_z_threshold)
+            self._save_updated_csv(df, chosen_z_threshold)
 
             # Step 7: Plot histogram
-            self.plot_histogram(
-                df, z_scores, gmm, null_component, chosen_z_threshold, precision, recall, f_score, specificity
+            self._plot_histogram(
+                df, z_scores, gmm, null_component,
+                chosen_z_threshold, precision, recall, f_score, specificity
             )
 
-            # Step 8: Save summary results
-            self.save_results(chosen_z_threshold, precision, recall, f_score, specificity)
+            if chosen_z_threshold is not None:
+                # Step 8: Save summary results
+                self._save_results(
+                    chosen_z_threshold, precision, recall, f_score, specificity
+                )
+                if self.with_ground_truth:
+                    logging.info(
+                        f"Metrics at threshold {chosen_z_threshold:.4f} - "
+                        f"Precision: {precision:.4f}, Recall: {recall:.4f}, "
+                        f"F1-Score: {f_score:.4f}, Specificity: {specificity:.4f}"
+                    )
 
             logging.info("Empirical Bayes analysis completed successfully.")
         except Exception as e:
             logging.error(f"Error during Empirical Bayes analysis: {e}")
             raise e
+
