@@ -5,7 +5,6 @@ import pysam
 from collections import defaultdict
 import pandas as pd
 import concurrent.futures
-import math
 
 
 def parse_arguments():
