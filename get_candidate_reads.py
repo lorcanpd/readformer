@@ -397,9 +397,9 @@ def main():
     else:
         print(f"Found {len(df)} read-level variant entries.")
         # sort df by chrom, pos using chrom_sort_key
-        df = df.sort_values(
-            by=["chrom", "pos"], key=lambda x: x.map(chrom_sort_key)
-        ).reset_index(drop=True)
+        df['chrom_sort_key'] = df['chrom'].apply(chrom_sort_key)
+        df = df.sort_values(['chrom_sort_key', 'pos']).reset_index(drop=True)
+        df = df.drop(columns=['chrom_sort_key'])
         df.to_csv(args.output_csv, index=False)
         print(f"CSV saved to: {args.output_csv}")
 
