@@ -4,6 +4,7 @@ import argparse
 import os
 from components.pretrain_data_streaming import create_data_loader
 from components.utils import apply_masking_with_consistent_replacements
+from components.read_embedding import InputEmbeddingLayer
 
 
 def get_args():
@@ -58,6 +59,10 @@ def save_tensors(tensor_dict, output_dir):
 def main():
     args = get_args()
 
+    input_embedding = InputEmbeddingLayer(
+        embedding_dim=32
+    )
+
     # Create data loader for validation
     data_loader = create_data_loader(
         file_paths=args.data_dir,
@@ -65,6 +70,11 @@ def main():
         nucleotide_threshold=args.max_sequence_length,
         max_sequence_length=args.max_sequence_length,
         batch_size=args.batch_size,
+        base_quality_pad_idx=input_embedding.base_quality_embeddings.padding_idx,
+        cigar_pad_idx=input_embedding.cigar_embeddings.padding_idx,
+        position_pad_idx=-1,
+        is_first_pad_idx=input_embedding.mate_pair_embeddings.padding_idx,
+        mapped_to_reverse_pad_idx=input_embedding.strand_embeddings.padding_idx,
         min_quality=args.min_read_quality,
         shuffle=True,
         num_workers=0
@@ -85,6 +95,7 @@ def main():
     validation_mapped_to_reverse = validation_batch['mapped_to_reverse']
 
 
+
     # Apply masking to the validation batch
     (
         val_masked_sequences, val_masked_indices, val_replaced_indices
@@ -98,19 +109,26 @@ def main():
 
     num_replaced = val_replaced_indices.sum().item()
     val_masked_cigar_encodings = validation_cigar_encodings.clone()
-    val_masked_cigar_encodings[val_masked_indices] = 5
+    val_masked_cigar_encodings[val_masked_indices] = input_embedding.cigar_embeddings.mask_index
+    val_masked_cigar_encodings[~validation_valid_positions] = input_embedding.cigar_embeddings.padding_idx
     val_masked_cigar_encodings[val_replaced_indices] = torch.randint(
         0, 4, (num_replaced,), dtype=torch.int32
     )
+
     val_masked_base_qualities = validation_base_qualities.clone()
-    val_masked_base_qualities[val_masked_indices] = 42
     val_masked_base_qualities[val_replaced_indices] = torch.randint(
-        0, 41, (num_replaced,), dtype=torch.int32
+        0, 45, (num_replaced,), dtype=torch.int32
     )
+    # Masking and padding of base qualities is handled by the embedding layer
+    # at the time of validation
+
     val_masked_is_first = validation_is_first.clone()
-    val_masked_is_first[val_masked_indices] = 2
+    val_masked_is_first[val_masked_indices] = input_embedding.mate_pair_embeddings.mask_index
+    val_masked_is_first[~validation_valid_positions] = input_embedding.mate_pair_embeddings.padding_idx
+
     val_masked_mapped_to_reverse = validation_mapped_to_reverse.clone()
-    val_masked_mapped_to_reverse[val_masked_indices] = 2
+    val_masked_mapped_to_reverse[val_masked_indices] = input_embedding.strand_embeddings.mask_index
+    val_masked_mapped_to_reverse[~validation_valid_positions] = input_embedding.strand_embeddings.padding_idx
 
     # Prepare tensors to save
     tensors_to_save = {

@@ -13,9 +13,9 @@ from components.read_embedding import (
     InputEmbeddingLayer, NucleotideEmbeddingLayer)
 from components.finetune_data_streaming import create_finetuning_dataloader
 from components.classification_head import BetaDistributionClassifier
-from components.utils import get_effective_number, get_layerwise_param_groups
+# from components.utils import get_effective_number, get_layerwise_param_groups
 from components.metrics import ValidationWriter
-from components.empirical_bayes import EmpiricalBayes
+# from components.empirical_bayes import EmpiricalBayes
 from pretrain_readwise_only import device_context, check_cuda_availability
 
 
@@ -60,10 +60,7 @@ def get_args():
 
     parser.add_argument(
         '--finetune_save_dir', type=str,
-        help=(
-            'Directory in which to save the fine-tuned model. Also used for '
-            'checkpointing.'
-        ),
+        help='Directory in which to save the fine-tuned model.',
         required=True
     )
     parser.add_argument(
@@ -401,7 +398,7 @@ def main():
                     # Get indices of the mutation positions.
                     indices = torch.nonzero(positions == mutation_positions, as_tuple=True)
 
-                    if indices[0].shape != args.batch_size:
+                    if indices[0].shape[0] != args.batch_size:
                         # Figure out which sequence is missing
                         missing_indices = torch.tensor(
                             list(set(range(args.batch_size)) - set(indices[0].tolist())))
@@ -409,8 +406,16 @@ def main():
                             list(set(range(args.batch_size)) - set(missing_indices.tolist())))
 
                         # keep references and labels of the remaining sequences
+
                         reference_embs = reference_embs[remaining_indices]
                         labels = labels[remaining_indices]
+                        # Get list from tensor of missing indices
+                        chr_ = [chr_[i] for i in remaining_indices.tolist()]
+                        mutation_positions = [mutation_positions.tolist()[i] for i in remaining_indices.tolist()]
+                        ref = [ref[i] for i in remaining_indices.tolist()]
+                        alt = [alt[i] for i in remaining_indices.tolist()]
+                        is_reverse = [is_reverse[i] for i in remaining_indices.tolist()]
+                        read_id = [read_id[i] for i in remaining_indices.tolist()]
 
                     classifier_in = readformer_out[indices]
 

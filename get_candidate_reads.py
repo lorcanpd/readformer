@@ -196,23 +196,34 @@ def unify_chromosome_name(chrom, from_prefix, to_prefix):
         return chrom  # fallback if any unexpected scenario
 
 
-def get_trinucleotide_context(fasta, chrom, pos0):
+def get_ICAMS_trinucleotide_context(fasta, chrom, pos0, alt_base):
     """
     Return the trinucleotide context around pos0 (0-based) on 'chrom'.
     If out of bounds, use 'N'. E.g., 'ACA', 'TCT', etc.
     PySAM's FastaFile.fetch(contig, start, end) is 0-based, end-exclusive.
     So 'fetch(chrom, pos0, pos0+1)' returns the base at pos0.
+    The complement of the bases, including the alt base, is obtained if the
+    middle base is not C or T, and the trinucleotide triplet is reversed.
+    To conform to the ICAMS trinucleotide context, the alt base is appended
+    to the end of the trinucleotide (e.g. 'ACAG')
     """
+    complement = {'A': 'T', 'C': 'G', 'G': 'C', 'T': 'A'}
     left_base = "N"
-    mid_base = "N"
-    right_base = "N"
 
     if pos0 - 1 >= 0:
         left_base = fasta.fetch(chrom, pos0 - 1, pos0).upper()
     mid_base = fasta.fetch(chrom, pos0, pos0 + 1).upper() or "N"
     right_base = fasta.fetch(chrom, pos0 + 1, pos0 + 2).upper() or "N"
 
-    return f"{left_base}{mid_base}{right_base}"
+    # If the middle base is not C or T, flip the entire trinucleotide
+    # to its reverse complement so that the middle becomes C or T.
+    if mid_base not in ['C', 'T']:
+        triplet = left_base + mid_base + right_base
+        rc = ''.join(complement[b] for b in reversed(triplet))
+        left_base, mid_base, right_base = rc[0], rc[1], rc[2]
+        alt_base = complement[alt_base]
+
+    return f"{left_base}{mid_base}{right_base}{alt_base}"
 
 
 def chrom_sort_key(chrom):
@@ -311,7 +322,14 @@ def process_chunk(
                 for read_name, base in read_bases.items():
                     if base == alt_base:
                         pos_on_read = read_positions[read_name]
-                        trinuc = get_trinucleotide_context(ref_fasta, ref_chrom, pos0)
+                        try:
+                            trinuc = get_ICAMS_trinucleotide_context(
+                                ref_fasta, ref_chrom, pos0, alt_base
+                            )
+                        except KeyError:
+                            # If any of the context bases are not the canonical
+                            # ACGT then skip this variant
+                            continue
                         # If "chr" prefix is present on the bed_chrom, remove it
                         if bed_chrom.startswith("chr"):
                             bed_chrom = bed_chrom[3:]
@@ -321,7 +339,7 @@ def process_chunk(
                             "ref": ref_base,
                             "alt": alt_base,
                             "read_id": read_name,
-                            "trinucleotide_context": trinuc,
+                            "mutation_type": trinuc,
                             "ref_count": ref_count,
                             "alt_count": alt_count,
                             "position_on_read": pos_on_read
