@@ -70,13 +70,13 @@ class PredictionDataset(Dataset):
                 base_qualities += read['base_qualities'][::-1]
                 cigar_encoding += read['cigar_encoding'][::-1]
                 positions += read['positions'][::-1]
-                reference += get_reverse_complement(row['REF'])
+                reference += get_reverse_complement(row['ref'])
             else:
                 nucleotide_sequences += list(read['query_sequence'])
                 base_qualities += read['base_qualities']
                 cigar_encoding += read['cigar_encoding']
                 positions += read['positions']
-                reference += row['REF']
+                reference += row['ref']
 
             sequence_length = len(read['query_sequence'])
 
@@ -115,12 +115,12 @@ class PredictionDataset(Dataset):
             # Single values
             'mut_pos': position,
             'reference': reference,
-            'is_reverse': row['mapped_to_reverse'],
+            'is_reverse': mapped_to_reverse,
             # Added for output
             'chr': chr_,
             'read_id': read_id,
-            'ref': row['REF'],
-            'alt': row['ALT'],
+            'ref': row['ref'],
+            'alt': row['alt'],
             'mutation_type': mutation_type
         }
 
@@ -139,10 +139,10 @@ def collate_fn(batch):
     positions = [item['positions'] for item in batch]
     is_first_flags = [item['is_first'] for item in batch]
     mapped_to_reverse_flags = [item['mapped_to_reverse'] for item in batch]
-    read_support = torch.tensor(
-        [item['read_support'] for item in batch], dtype=torch.float32)
-    num_in_class = torch.tensor(
-        [item['num_in_class'] for item in batch], dtype=torch.float32)
+    # read_support = torch.tensor(
+    #     [item['read_support'] for item in batch], dtype=torch.float32)
+    # num_in_class = torch.tensor(
+    #     [item['num_in_class'] for item in batch], dtype=torch.float32)
     # labels = torch.tensor(
     #     [item['label'] for item in batch], dtype=torch.float32)
     is_reverse = [item['is_reverse'] for item in batch]
@@ -183,7 +183,7 @@ def collate_fn(batch):
         'read_id': read_id,
         'ref': ref,
         'alt': alt,
-        mutation_type: mutation_type
+        'mutation_type': mutation_type
     }
 
     batch = CustomBatch(batched_data)

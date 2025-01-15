@@ -61,6 +61,14 @@ def parse_arguments():
         "--max_read_support", type=int, default=1,
         help="Maximum read support for a candidate variant. Default=1."
     )
+    parser.add_argument(
+        "--dist_from_five_prime",
+        type=int, default=100,
+        help=(
+            "Candidate mutations withing this distance of the 5' end of a read "
+            "will be considered."
+        )
+    )
     return parser.parse_args()
 
 
@@ -263,7 +271,8 @@ def chrom_sort_key(chrom):
 def process_chunk(
     chunk_regions, temp_dir, bam_file, ref_fasta_file,
     avoid_dict, bam_prefix, ref_prefix, from_prefix, avoid_bed_prefix,
-    mapq_threshold, baseq_threshold, min_coverage, max_read_support
+    mapq_threshold, baseq_threshold, min_coverage, max_read_support,
+    max_dist_from_five_prime
 ):
     """
     A function to process a chunk of regions (list of (chrom, start, end)) in one worker.
@@ -306,6 +315,8 @@ def process_chunk(
             base_counts = defaultdict(int)
             read_bases = {}
             read_positions = {}
+            read_orientations = {}
+            read_lengths = {}
 
             for pileupread in pileupcolumn.pileups:
                 if pileupread.is_del or pileupread.is_refskip:
@@ -325,6 +336,8 @@ def process_chunk(
                 base_counts[base] += 1
                 read_bases[read.query_name] = base
                 read_positions[read.query_name] = idx_on_read
+                read_orientations[read.query_name] = read.is_reverse
+                read_lengths[read.query_name] = len(read.query_sequence)
 
             coverage = sum(base_counts.values())
             if coverage < min_coverage:
@@ -344,6 +357,14 @@ def process_chunk(
                 for read_name, base in read_bases.items():
                     if base == alt_base:
                         pos_on_read = read_positions[read_name]
+                        # check if read is forward or reverse
+                        if read_orientations[read_name]:
+                            if (read_lengths[read_name] -
+                                    max_dist_from_five_prime > pos_on_read):
+                                continue
+                        else:
+                            if pos_on_read >= max_dist_from_five_prime:
+                                continue
                         try:
                             trinuc = get_ICAMS_trinucleotide_context(
                                 ref_fasta, ref_chrom, pos0, alt_base
@@ -386,6 +407,8 @@ def main():
         # If no bed_file is provided, chunk the entire contigs from the BAM
         region_chunks = chunk_all_contigs(args.bam, args.num_threads)
 
+    region_chunks = [chunk[:2] for chunk in region_chunks]
+
     # 2) Build avoid dict
     avoid_dict = build_avoid_region_dict(args.avoid_bed)
     avoid_bed_prefix = detect_chrom_prefix_bed(args.avoid_bed) if args.avoid_bed else ""
@@ -415,7 +438,8 @@ def main():
         "mapq_threshold": args.mapq_threshold,
         "baseq_threshold": args.baseq_threshold,
         "min_coverage": args.min_coverage,
-        "max_read_support": args.max_read_support
+        "max_read_support": args.max_read_support,
+        "max_dist_from_five_prime": args.dist_from_five_prime
     }
 
     worker_func = partial(process_chunk, **worker_args)

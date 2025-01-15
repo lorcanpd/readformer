@@ -138,7 +138,7 @@ def load_pretrained_model(args, device):
         logging.error(f"Error loading checkpoint '{args.model_path}': {e}")
         sys.exit(1)
 
-    logging.info(f"Loaded pre-trained model from '{args.pre_trained_path}'")
+    logging.info(f"Loaded pre-trained model from '{args.model_path}'")
 
     return (
         input_embedding, readformer_model, ref_base_embedding, classifier
@@ -263,6 +263,7 @@ def main():
         shuffle=False,
         num_workers=get_allocated_cpus() // 2,
         prefetch_factor=1
+        # num_workers=0
     )
 
     # Set the model to evaluation mode
@@ -276,35 +277,35 @@ def main():
         torch.no_grad()
     ):
         for batch in dataloader:
-            nucleotide_sequences = batch.nucleotide_sequences.to(device)
-            base_qualities = batch.base_qualities.to(device)
-            cigar_encoding = batch.cigar_encoding.to(device)
-            is_first_flags = batch.is_first.to(device)
-            mapped_to_reverse_flags = batch.mapped_to_reverse.to(device)
+            nucleotide_sequences = batch['nucleotide_sequences'].to(device)
+            base_qualities = batch['base_qualities'].to(device)
+            cigar_encoding = batch['cigar_encoding'].to(device)
+            is_first_flags = batch['is_first'].to(device)
+            mapped_to_reverse_flags = batch['mapped_to_reverse'].to(device)
 
-            positions = batch.positions.to(device)
+            positions = batch['positions'].to(device)
 
-            reference = batch.reference.to(device)
+            reference = batch['reference'].to(device)
 
-            mutation_positions = batch.mut_pos.to(device).unsqueeze(-1)
+            mutation_positions = batch['mut_pos'].to(device).unsqueeze(-1)
 
-            chr_ = batch.chr
-            read_id = batch.read_id
-            ref = batch.ref
-            alt = batch.alt
-            is_reverse = batch.is_reverse
-            mutation_type = batch.mutation_type
+            chr_ = batch['chr']
+            read_id = batch['read_id']
+            ref = batch['ref']
+            alt = batch['alt']
+            is_reverse = batch['is_reverse']
+            mutation_type = batch['mutation_type']
 
             del batch
 
             # Forward pass
-            model_input = (
+            model_input = input_embedding(
                 nucleotide_sequences, cigar_encoding, base_qualities,
                 mapped_to_reverse_flags, is_first_flags
             )
 
             readformer_out = readformer_model(
-                model_input
+                model_input, positions
             )
             reference_embs = ref_base_embedding(reference).squeeze(-2)
 
@@ -341,9 +342,14 @@ def main():
             alpha, beta, _, _ = classifier(classifier_input, reference_embs)
 
             writer.update(
-                alpha, beta, chr_=chr_, pos=mutation_positions, ref=ref,
-                alt=alt, mapped_to_reverse=is_reverse,
-                read_id=read_id, mutation_type=mutation_type
+                alpha.squeeze(-1), beta.squeeze(-1), chr_=chr_,
+                pos=mutation_positions, ref=ref, alt=alt,
+                mapped_to_reverse=is_reverse, read_id=read_id,
+                mutation_type=mutation_type
             )
 
     logging.info("Predictions complete.")
+
+
+if __name__ == '__main__':
+    main()

@@ -20,8 +20,9 @@ class EmpiricalBayes:
     """
 
     def __init__(
-            self, fold, phase_index, validation_output_dir, desired_fdr=0.01,
-            sample_size=None, random_state=42, with_ground_truth=False
+            self, validation_output_dir, desired_fdr=0.01,
+            sample_size=None, random_state=42, with_ground_truth=False,
+            fold=None, phase_index=None,
     ):
         """
         Initializes the EmpiricalBayes instance with necessary parameters.
@@ -36,6 +37,8 @@ class EmpiricalBayes:
                 If None, use all samples.
             random_state (int, optional): Seed for random number generator for reproducibility.
         """
+        # Adapt this for when we aren't doing validation with ground truth but
+        # instead a prediction
         self.fold = fold
         self.phase_index = phase_index
         self.validation_output_dir = validation_output_dir
@@ -45,30 +48,57 @@ class EmpiricalBayes:
         self.with_ground_truth = with_ground_truth
 
         # Construct the prediction file path
-        self.prediction_filename = f"fold_{self.fold}_phase_{self.phase_index:03d}_predictions.csv"
-        self.prediction_path = os.path.join(self.validation_output_dir, self.prediction_filename)
+        if with_ground_truth:
 
-        # Construct output filenames
-        self.plot_filename = f"fold_{self.fold}_phase_{self.phase_index:03d}_zscore_histogram.png"
-        self.plot_path = os.path.join(self.validation_output_dir, self.plot_filename)
+            self.prediction_filename = f"fold_{self.fold}_phase_{self.phase_index:03d}_predictions.csv"
+            self.prediction_path = os.path.join(self.validation_output_dir, self.prediction_filename)
 
-        self.results_filename = f"fold_{self.fold}_phase_{self.phase_index:03d}_results.csv"
-        self.results_path = os.path.join(self.validation_output_dir, self.results_filename)
+            # Construct output filenames
+            self.plot_filename = f"fold_{self.fold}_phase_{self.phase_index:03d}_zscore_histogram.png"
+            self.plot_path = os.path.join(self.validation_output_dir, self.plot_filename)
+
+            self.results_filename = f"fold_{self.fold}_phase_{self.phase_index:03d}_results.csv"
+            self.results_path = os.path.join(self.validation_output_dir, self.results_filename)
+
+            logging.basicConfig(
+                level=logging.INFO,
+                format='%(asctime)s - %(levelname)s - %(message)s',
+                handlers=[
+                    logging.StreamHandler(),
+                    logging.FileHandler(os.path.join(
+                        self.validation_output_dir,
+                        f"empirical_bayes_fold_{self.fold}_"
+                        f"phase_{self.phase_index:03d}.log"
+                    ))
+                ]
+            )
+        else:
+            self.prediction_filename="predictions.csv"
+            self.prediction_path = os.path.join(self.validation_output_dir, self.prediction_filename)
+
+            # Construct output filenames
+            self.plot_filename = "zscore_histogram.png"
+            self.plot_path = os.path.join(self.validation_output_dir, self.plot_filename)
+
+            self.results_filename = "results.csv"
+            self.results_path = os.path.join(self.validation_output_dir, self.results_filename)
+
+            logging.basicConfig(
+                level=logging.INFO,
+                format='%(asctime)s - %(levelname)s - %(message)s',
+                handlers=[
+                    logging.StreamHandler(),
+                    logging.FileHandler(os.path.join(
+                        self.validation_output_dir,
+                        f"empirical_bayes.log"
+                    ))
+                ]
+            )
 
         # Setup logging
         os.makedirs(self.validation_output_dir, exist_ok=True)  # Ensure output directory exists
-        logging.basicConfig(
-            level=logging.INFO,
-            format='%(asctime)s - %(levelname)s - %(message)s',
-            handlers=[
-                logging.StreamHandler(),
-                logging.FileHandler(os.path.join(
-                    self.validation_output_dir,
-                    f"empirical_bayes_fold_{self.fold}_"
-                    f"phase_{self.phase_index:03d}.log"
-                ))
-            ]
-        )
+
+
         logging.info("Initialised EmpiricalBayes instance.")
 
     @staticmethod
@@ -255,7 +285,10 @@ class EmpiricalBayes:
         else:
             df["called_mutation"] = False
 
-        updated_filename = f"fold_{self.fold}_phase_{self.phase_index:03d}_epoch_{self.phase_index:03d}_predictions_with_zlfdr.csv"
+        if self.with_ground_truth:
+            updated_filename = f"fold_{self.fold}_phase_{self.phase_index:03d}_epoch_{self.phase_index:03d}_predictions_with_zlfdr.csv"
+        else:
+            updated_filename = "predictions_with_zlfdr.csv"
         updated_path = os.path.join(self.validation_output_dir, updated_filename)
         df.to_csv(updated_path, index=False)
         logging.info(f"Saved updated predictions to '{updated_path}'.")
@@ -265,16 +298,22 @@ class EmpiricalBayes:
         Saves threshold + metrics (if computed) to CSV. If with_ground_truth=False,
         metrics might be None or omitted.
         """
-        results = {
-            'fold': self.fold,
-            'phase': self.phase_index,
-            'desired_fdr': self.desired_fdr,
-            'chosen_z_threshold': chosen_z_threshold,
-            'precision': precision if precision is not None else "",
-            'recall': recall if recall is not None else "",
-            'f1_score': f_score if f_score is not None else "",
-            'specificity': specificity if specificity is not None else ""
-        }
+        if self.with_ground_truth:
+            results = {
+                'fold': self.fold,
+                'phase': self.phase_index,
+                'desired_fdr': self.desired_fdr,
+                'chosen_z_threshold': chosen_z_threshold,
+                'precision': precision if precision is not None else "",
+                'recall': recall if recall is not None else "",
+                'f1_score': f_score if f_score is not None else "",
+                'specificity': specificity if specificity is not None else ""
+            }
+        else:
+            results = {
+                'desired_fdr': self.desired_fdr,
+                'chosen_z_threshold': chosen_z_threshold
+            }
         results_df = pd.DataFrame([results])
         results_df.to_csv(self.results_path, index=False)
         logging.info(f"Saved summary results to '{self.results_path}'.")

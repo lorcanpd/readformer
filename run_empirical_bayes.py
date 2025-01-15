@@ -8,16 +8,16 @@ def get_args():
         description="Empirical Bayes Validation Analysis"
     )
     parser.add_argument(
-        '--fold', type=int, required=True,
-        help='Fold number for cross-validation.'
-    )
-    parser.add_argument(
         '--validation_output_dir', type=str,
         required=True, help='Directory to save validation outputs.'
     )
     parser.add_argument(
         '--desired_fdr', type=float, default=0.01,
         help='Desired false discovery rate.'
+    )
+    parser.add_argument(
+        '--fold', type=int,
+        help='Fold number for cross-validation.'
     )
     parser.add_argument(
         '--sample_size', type=int, default=None,
@@ -42,19 +42,31 @@ def main():
 
     # get the number of prediction files in the directory that start with
     # fold_{fold} and end with predictions.csv
-    num_files = len(
-        [
-            f for f in os.listdir(args.validation_output_dir)
-            if f.startswith(f"fold_{args.fold}")
-            and f.endswith("predictions.csv")
-        ]
-    )
+    if args.with_ground_truth:
+        num_files = len(
+            [
+                f for f in os.listdir(args.validation_output_dir)
+                if f.startswith(f"fold_{args.fold}")
+                and f.endswith("predictions.csv")
+            ]
+        )
 
-    for phase_index in range(num_files):
-        # Instantiate the EmpiricalBayes class
+        for phase_index in range(num_files):
+            # Instantiate the EmpiricalBayes class
+            eb = EmpiricalBayes(
+                fold=args.fold,
+                phase_index=phase_index,
+                validation_output_dir=args.validation_output_dir,
+                desired_fdr=args.desired_fdr,
+                sample_size=args.sample_size,
+                random_state=args.random_seed,
+                with_ground_truth=args.with_ground_truth
+            )
+
+            # Run the Empirical Bayes analysis
+            eb.run()
+    else:
         eb = EmpiricalBayes(
-            fold=args.fold,
-            phase_index=phase_index,
             validation_output_dir=args.validation_output_dir,
             desired_fdr=args.desired_fdr,
             sample_size=args.sample_size,
