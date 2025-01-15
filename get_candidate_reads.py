@@ -5,6 +5,11 @@ import pysam
 from collections import defaultdict
 import pandas as pd
 import concurrent.futures
+from functools import partial
+import tempfile
+import csv
+import os
+import shutil
 
 
 def parse_arguments():
@@ -26,20 +31,23 @@ def parse_arguments():
         help="Path to the reference FASTA file."
     )
     parser.add_argument(
-        "--output_csv", required=True,
-        help="Output CSV file path."
+        "--output_dir", required=True,
+        help=(
+            "Output directory path for the CSV file of candidate positions and "
+            "reads."
+        )
     )
     parser.add_argument(
         "--mapq_threshold", type=int, default=30,
         help="Minimum read mapping quality. Default=30."
     )
     parser.add_argument(
-        "--baseq_threshold", type=int, default=20,
-        help="Minimum base quality. Default=20."
+        "--baseq_threshold", type=int, default=25,
+        help="Minimum base quality. Default=25."
     )
     parser.add_argument(
-        "--min_coverage", type=int, default=20,
-        help="Minimum coverage at a site for consideration. Default=20."
+        "--min_coverage", type=int, default=30,
+        help="Minimum coverage at a site for consideration. Default=30."
     )
     parser.add_argument(
         "--avoid_bed",
@@ -48,6 +56,10 @@ def parse_arguments():
     parser.add_argument(
         "--num_threads", type=int, default=4,
         help="Number of worker processes to use. Default=4."
+    )
+    parser.add_argument(
+        "--max_read_support", type=int, default=1,
+        help="Maximum read support for a candidate variant. Default=1."
     )
     return parser.parse_args()
 
@@ -247,20 +259,30 @@ def chrom_sort_key(chrom):
         # For other cases, return a high value to place them at the end
         return 100 + hash(chrom)
 
+
 def process_chunk(
-    chunk_regions, bam_file, ref_fasta_file,
+    chunk_regions, temp_dir, bam_file, ref_fasta_file,
     avoid_dict, bam_prefix, ref_prefix, from_prefix, avoid_bed_prefix,
-    mapq_threshold, baseq_threshold, min_coverage
+    mapq_threshold, baseq_threshold, min_coverage, max_read_support
 ):
     """
     A function to process a chunk of regions (list of (chrom, start, end)) in one worker.
     Returns a list of dictionaries, each corresponding to a single-read variant.
     """
-    results = []
+    # results = []
     bam = pysam.AlignmentFile(bam_file, "rb")
     ref_fasta = pysam.FastaFile(ref_fasta_file)
 
     for (bed_chrom, bed_start, bed_end) in chunk_regions:
+        # Initialise a temporary CSV file for this chunk inside the temp_dir
+        csv_writer = csv.writer(
+            open(f"{temp_dir}/{bed_chrom}_{bed_start}_{bed_end}.csv", "w")
+        )
+        csv_writer.writerow([
+            "chrom", "pos", "ref", "alt", "read_id",
+            "mutation_type", "ref_count", "alt_count", "position_on_read"
+        ])
+
         # Convert BED chromosome to match the BAM prefix for pileup
         bam_chrom = unify_chromosome_name(bed_chrom, from_prefix, bam_prefix)
         # Convert also to the reference prefix for reference fetch
@@ -314,7 +336,7 @@ def process_chunk(
             # We only track single-read variants (alt_count == 1),
             # but you can remove "alt_count == 1" if you want everything.
             for alt_base, alt_count in base_counts.items():
-                if alt_base == ref_base or alt_count != 1:
+                if alt_base == ref_base or alt_count > max_read_support:
                     continue
                 ref_count = base_counts.get(ref_base, 0)
 
@@ -333,26 +355,25 @@ def process_chunk(
                         # If "chr" prefix is present on the bed_chrom, remove it
                         if bed_chrom.startswith("chr"):
                             bed_chrom = bed_chrom[3:]
-                        row = {
-                            "chrom": bed_chrom,
-                            "pos": pos0,
-                            "ref": ref_base,
-                            "alt": alt_base,
-                            "read_id": read_name,
-                            "mutation_type": trinuc,
-                            "ref_count": ref_count,
-                            "alt_count": alt_count,
-                            "position_on_read": pos_on_read
-                        }
-                        results.append(row)
+
+                        csv_writer.writerow(
+                            [
+                                bed_chrom, pos0, ref_base, alt_base,
+                                read_name, trinuc, ref_count, alt_count,
+                                pos_on_read
+                            ]
+                        )
 
     bam.close()
     ref_fasta.close()
-    return results
 
 
 def main():
     args = parse_arguments()
+
+    # 0) Create temp directory in output_dir. This is where each chunk will
+    # write its temporary CSV file.
+    temp_dir = tempfile.mkdtemp(dir=args.output_dir)
 
     # 1) Possibly read or create regions
     if args.bed_file:
@@ -381,9 +402,9 @@ def main():
         from_prefix = bam_prefix
 
     # 4) Parallel processing
-    all_records = []
-    # We'll define the arguments that remain constant
+    # Fixed arguments for the worker function
     worker_args = {
+        "temp_dir": temp_dir,
         "bam_file": args.bam,
         "ref_fasta_file": args.reference_fasta,
         "avoid_dict": avoid_dict,
@@ -393,32 +414,35 @@ def main():
         "avoid_bed_prefix": avoid_bed_prefix,
         "mapq_threshold": args.mapq_threshold,
         "baseq_threshold": args.baseq_threshold,
-        "min_coverage": args.min_coverage
+        "min_coverage": args.min_coverage,
+        "max_read_support": args.max_read_support
     }
+
+    worker_func = partial(process_chunk, **worker_args)
 
     with concurrent.futures.ProcessPoolExecutor(
             max_workers=args.num_threads) as executor:
-        futures = []
-        for chunk in region_chunks:
-            futures.append(
-                executor.submit(process_chunk, chunk, **worker_args)
-            )
-        for fut in concurrent.futures.as_completed(futures):
-            chunk_result = fut.result()
-            all_records.extend(chunk_result)
 
-    # 5) Convert to DataFrame, save
-    df = pd.DataFrame(all_records)
-    if df.empty:
-        print("No variants found under the given thresholds.")
-    else:
-        print(f"Found {len(df)} read-level variant entries.")
-        # sort df by chrom, pos using chrom_sort_key
-        df['chrom_sort_key'] = df['chrom'].apply(chrom_sort_key)
-        df = df.sort_values(['chrom_sort_key', 'pos']).reset_index(drop=True)
-        df = df.drop(columns=['chrom_sort_key'])
-        df.to_csv(args.output_csv, index=False)
-        print(f"CSV saved to: {args.output_csv}")
+        executor.map(
+            worker_func, region_chunks
+        )
+
+    with open(f"{args.output_dir}/candidate_mutations.csv", "w") as out_f:
+        out_f.write(
+            "chrom,pos,ref,alt,read_id,mutation_type,ref_count,alt_count,"
+            "position_on_read\n"
+        )
+        sorted_files = sorted(
+            os.listdir(temp_dir),
+            key=lambda x: (chrom_sort_key(x.split('_')[0]), int(x.split('_')[1]))
+        )
+        for temp_file in sorted_files:
+            with open(f"{temp_dir}/{temp_file}", "r") as in_f:
+                next(in_f)
+                shutil.copyfileobj(in_f, out_f)
+
+    # Remove temporary directory
+    shutil.rmtree(temp_dir)
 
 
 if __name__ == "__main__":
