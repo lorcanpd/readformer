@@ -210,7 +210,6 @@ def device_context(device):
 
 
 def main():
-
     args = get_args()
 
     if not os.path.exists(args.model_dir):
@@ -480,7 +479,7 @@ def main():
         is_first_pad_idx=input_embedding.mate_pair_embeddings.padding_idx,
         mapped_to_reverse_pad_idx=input_embedding.strand_embeddings.padding_idx,
         shuffle=True,
-        num_workers=get_allocated_cpus()-1,
+        num_workers=get_allocated_cpus() - 1,
         # num_workers=0,
         prefetch_factor=2
     )
@@ -523,7 +522,7 @@ def main():
         positions = batch['positions']
         is_first = batch['is_first']
         mapped_reverse = batch['mapped_to_reverse']
-        
+
         positions = positions.to(device)
         valid_mask = valid_mask.to(device)
         nucleotide_sequences = nucleotide_sequences.to(device)
@@ -541,6 +540,22 @@ def main():
                 replace_rate=proportion_random,
                 kernel_size=kernel_size, split=0.5
             )
+            replaced_bases = apply_masking_with_consistent_replacements(
+                nucleotide_sequences, input_embedding.nucleotide_embeddings.mask_index,
+                rate=corruption_rate, mask_rate=mask_rate,
+                replace_rate=proportion_random,
+                kernel_size=kernel_size, split=0.5
+            )[-1]
+            replaced_cigar = apply_masking_with_consistent_replacements(
+                nucleotide_sequences, input_embedding.nucleotide_embeddings.mask_index,
+                rate=corruption_rate, mask_rate=mask_rate,
+                replace_rate=proportion_random,
+                kernel_size=kernel_size, split=0.5
+            )[-1]
+
+            # remove any overlap from replacement masks and the masked indices.
+            replaced_bases[masked_indices] = False
+            replaced_cigar[masked_indices] = False
 
             num_replaced = replaced_indices.sum().item()
 
@@ -548,11 +563,11 @@ def main():
             masked_cigar_encodings[masked_indices] = input_embedding.cigar_embeddings.mask_index
             masked_cigar_encodings[~valid_mask] = input_embedding.cigar_embeddings.padding_idx
             # replace the masked indices with num_replaced random indices
-            masked_cigar_encodings[replaced_indices] = torch.randint(
+            masked_cigar_encodings[replaced_cigar] = torch.randint(
                 0, 4, (num_replaced,), dtype=torch.int32, device=device
             )
             masked_base_qualities = base_qualities.clone().to(device)
-            masked_base_qualities[replaced_indices] = torch.randint(
+            masked_base_qualities[replaced_bases] = torch.randint(
                 0, 45, (num_replaced,), dtype=torch.int32, device=device
             )
 
@@ -562,32 +577,6 @@ def main():
             masked_mapped_reverse = mapped_reverse.clone().to(device)
             masked_mapped_reverse[masked_indices] = input_embedding.strand_embeddings.mask_index
             masked_mapped_reverse[~valid_mask] = input_embedding.strand_embeddings.padding_idx
-            #
-            # masked_nucleotide_emb = nucleotide_embeddings(masked_sequences)
-            #
-            # # Concatenate the metrics embeddings.
-            # metric_emb = torch.cat(
-            #     [
-            #         cigar_embeddings(masked_cigar_encodings),
-            #         base_quality_embeddings(
-            #             masked_base_qualities, masked_indices, ~valid_mask
-            #         ),
-            #         strand_embeddings(masked_mapped_reverse),
-            #         mate_pair_embeddings(masked_is_first)
-            #     ],
-            #     dim=-1
-            # )
-            #
-            # # Gate the nucleotide embeddings using the metrics embeddings a la
-            # # SwiGLU.
-            # gate = torch.sigmoid(
-            #     gate_projection(metric_emb))
-            # swish_output = F.silu(
-            #     feature_projection(masked_nucleotide_emb))
-            # # Apply the gating mechanism to the nucleotide embeddings with dropout.
-            # model_input = F.dropout(
-            #     gate * swish_output, p=0.1, training=True
-            # ).to(device) + masked_nucleotide_emb
 
             model_input = input_embedding(
                 masked_sequences, masked_cigar_encodings,
@@ -616,8 +605,8 @@ def main():
                 scale_factor=1
             )
             base_quality_loss = metric_loss_fn(
-                base_quality_output[masked_indices | replaced_indices],
-                base_qualities[masked_indices | replaced_indices],
+                base_quality_output[masked_indices | replaced_bases],
+                base_qualities[masked_indices | replaced_bases],
                 scale_factor=1
             )
 
@@ -627,8 +616,8 @@ def main():
             )
 
             train_base_quality_perplexity = calculate_perplexity(
-                base_quality_output[masked_indices | replaced_indices],
-                base_qualities[masked_indices | replaced_indices]
+                base_quality_output[masked_indices | replaced_bases],
+                base_qualities[masked_indices | replaced_bases]
             )
 
             loss = identity_loss + base_quality_loss
@@ -659,25 +648,6 @@ def main():
 
             # Validation forward pass.
             with torch.no_grad():
-
-                # val_masked_nucleotide_emb = nucleotide_embeddings(
-                #     validation_masked_sequences)
-                # val_metric_emb = torch.cat(
-                #     [
-                #         cigar_embeddings(validation_masked_cigar_encodings),
-                #         base_quality_embeddings(validation_masked_base_qualities),
-                #         strand_embeddings(validation_masked_mapped_to_reverse),
-                #         mate_pair_embeddings(validation_masked_is_first)
-                #     ],
-                #     dim=-1
-                # )
-
-                # # SwiGLU gating.
-                # val_gate = torch.sigmoid(
-                #     gate_projection(val_metric_emb))
-                # val_swish_output = F.silu(
-                #     feature_projection(val_masked_nucleotide_emb))
-                # val_model_input = val_gate * val_swish_output + val_masked_nucleotide_emb
                 val_model_input = input_embedding(
                     validation_masked_sequences,
                     validation_masked_cigar_encodings,
