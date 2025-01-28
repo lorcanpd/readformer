@@ -111,21 +111,21 @@ def main():
         replace_rate=args.proportion_random,
         kernel_size=args.kernel_size, split=0.5
     )[-1]
-    val_replaced_cigar = apply_masking_with_consistent_replacements(
-        validation_nucleotide_sequences,
-        args.mask_token_index, rate=args.corruption_rate,
-        mask_rate=1.0 - 2 * args.proportion_random,
-        replace_rate=args.proportion_random,
-        kernel_size=args.kernel_size, split=0.5
-    )[-1]
+    # val_replaced_cigar = apply_masking_with_consistent_replacements(
+    #     validation_nucleotide_sequences,
+    #     args.mask_token_index, rate=args.corruption_rate,
+    #     mask_rate=1.0 - 2 * args.proportion_random,
+    #     replace_rate=args.proportion_random,
+    #     kernel_size=args.kernel_size, split=0.5
+    # )[-1]
 
     num_replaced = val_replaced_indices.sum().item()
     val_masked_cigar_encodings = validation_cigar_encodings.clone()
     val_masked_cigar_encodings[val_masked_indices] = input_embedding.cigar_embeddings.mask_index
     val_masked_cigar_encodings[~validation_valid_positions] = input_embedding.cigar_embeddings.padding_idx
-    val_masked_cigar_encodings[val_replaced_cigar] = torch.randint(
-        0, 4, (num_replaced,), dtype=torch.int32
-    )
+    # val_masked_cigar_encodings[val_replaced_cigar] = torch.randint(
+    #     0, 4, (num_replaced,), dtype=torch.int32
+    # )
 
     val_masked_base_qualities = validation_base_qualities.clone()
     val_masked_base_qualities[val_replaced_bases] = torch.randint(

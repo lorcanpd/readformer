@@ -546,16 +546,16 @@ def main():
                 replace_rate=proportion_random,
                 kernel_size=kernel_size, split=0.5
             )[-1]
-            replaced_cigar = apply_masking_with_consistent_replacements(
-                nucleotide_sequences, input_embedding.nucleotide_embeddings.mask_index,
-                rate=corruption_rate, mask_rate=mask_rate,
-                replace_rate=proportion_random,
-                kernel_size=kernel_size, split=0.5
-            )[-1]
+            # replaced_cigar = apply_masking_with_consistent_replacements(
+            #     nucleotide_sequences, input_embedding.nucleotide_embeddings.mask_index,
+            #     rate=corruption_rate, mask_rate=mask_rate,
+            #     replace_rate=proportion_random,
+            #     kernel_size=kernel_size, split=0.5
+            # )[-1]
 
             # remove any overlap from replacement masks and the masked indices.
             replaced_bases[masked_indices] = False
-            replaced_cigar[masked_indices] = False
+            # replaced_cigar[masked_indices] = False
 
             num_replaced = replaced_indices.sum().item()
 
@@ -563,9 +563,9 @@ def main():
             masked_cigar_encodings[masked_indices] = input_embedding.cigar_embeddings.mask_index
             masked_cigar_encodings[~valid_mask] = input_embedding.cigar_embeddings.padding_idx
             # replace the masked indices with num_replaced random indices
-            masked_cigar_encodings[replaced_cigar] = torch.randint(
-                0, 4, (num_replaced,), dtype=torch.int32, device=device
-            )
+            # masked_cigar_encodings[replaced_cigar] = torch.randint(
+            #     0, 4, (num_replaced,), dtype=torch.int32, device=device
+            # )
             masked_base_qualities = base_qualities.clone().to(device)
             masked_base_qualities[replaced_bases] = torch.randint(
                 0, 45, (num_replaced,), dtype=torch.int32, device=device
