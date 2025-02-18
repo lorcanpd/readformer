@@ -101,11 +101,11 @@ def cigar_to_integer_encoding(cigar, read_length):
     """
     # Define CIGAR operation to integer mapping
     op_mapping = {
-        'M': 0,
-        'I': 1,
-        'S': 2,
-        '=': 3,
-        'X': 4
+        'M': 0,  # Alignment match or mismatch
+        'I': 1,  # Insertion to the reference
+        'S': 2,  # Soft clip
+        '=': 3,  # Sequence match
+        'X': 4   # Sequence mismatch
     }
     none_code = -1
 
