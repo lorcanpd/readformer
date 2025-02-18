@@ -165,6 +165,7 @@ def load_checkpoint(
         # model_dir, model_name,
         checkpoint_path,
         model, classifier, base_quality_classifier,
+        cigar_classifier,
         input_embedding,
         optimiser
 ):
@@ -175,6 +176,7 @@ def load_checkpoint(
         model.load_state_dict(checkpoint['model_state_dict'])
         classifier.load_state_dict(checkpoint['classifier_state_dict'])
         base_quality_classifier.load_state_dict(checkpoint['base_quality_classifier_state_dict'])
+        cigar_classifier.load_state_dict(checkpoint['cigar_classifier_state_dict'])
         input_embedding.load_state_dict(checkpoint['input_embedding_state_dict'])
         optimiser.load_state_dict(checkpoint['optimiser_state_dict'])
         epoch = checkpoint['epoch']
@@ -315,24 +317,6 @@ def main():
     # torch.autograd.set_detect_anomaly(True)
 
     mask_rate = 1.0 - 2 * proportion_random
-    # nucleotide_embeddings = NucleotideEmbeddingLayer(
-    #     emb_dim, mlm_mode=True
-    # ).apply(init_weights).to(device)
-    # cigar_embeddings = CigarEmbeddingLayer(
-    #     emb_dim // 4
-    # ).apply(init_weights).to(device)
-    # base_quality_embeddings = BaseQualityEmbeddingLayer(
-    #     emb_dim // 4
-    # ).apply(init_weights).to(device)
-    # strand_embeddings = StrandEmbeddingLayer(
-    #     emb_dim // 4
-    # ).apply(init_weights).to(device)
-    # mate_pair_embeddings = MatePairEmbeddingLayer(
-    #     emb_dim // 4
-    # ).apply(init_weights).to(device)
-    #
-    # gate_projection = nn.Linear(emb_dim, emb_dim).to(device).train()
-    # feature_projection = nn.Linear(emb_dim, emb_dim).to(device).train()
 
     input_embedding = InputEmbeddingLayer(
         emb_dim, max_quality=max_base_quality
@@ -354,20 +338,15 @@ def main():
     base_quality_classifier = nn.Linear(
         emb_dim, max_base_quality + 1).to(device).train()
 
+    cigar_classifier = nn.Linear(
+        emb_dim, input_embedding.cigar_embeddings.num_embeddings
+    ).to(device).train()
+
     min_lr = main_lr / 3
     param_groups = get_layerwise_param_groups(
         readformer, main_lr, min_lr
     )
     # Add the embedding layers to the parameter groups
-    # embedding_params = (
-    #         list(nucleotide_embeddings.parameters()) +
-    #         list(cigar_embeddings.parameters()) +
-    #         list(base_quality_embeddings.parameters()) +
-    #         list(strand_embeddings.parameters()) +
-    #         list(mate_pair_embeddings.parameters()) +
-    #         list(gate_projection.parameters()) +
-    #         list(feature_projection.parameters())
-    # )
     embedding_params = list(input_embedding.parameters())
     param_groups.append({
         "params": embedding_params,
@@ -398,6 +377,7 @@ def main():
 
     loss_fn = MLMLoss()
     metric_loss_fn = MLMLoss()
+    cigar_loss_fn = MLMLoss()
 
     i = 0
     last_step = i
@@ -494,12 +474,15 @@ def main():
     validation_replaced_indices = validation_batch['replaced_indices'].to(device)
     validation_masked_cigar_encodings = validation_batch['masked_cigar_encodings'].to(device)
     validation_masked_base_qualities = validation_batch['masked_base_qualities'].to(device)
+    validation_replaced_base_qualities = validation_batch['replaced_base_qual'].to(device)
+    validation_replaced_cigar_encodings = validation_batch['replaced_cigar'].to(device)
     validation_masked_mapped_to_reverse = validation_batch['masked_mapped_to_reverse'].to(device)
     validation_masked_is_first = validation_batch['masked_is_first'].to(device)
 
     # ground truth
     validation_nucleotide_sequences = validation_batch['nucleotide_sequences'].to(device)
     validation_base_qualities = validation_batch['base_qualities'].clamp(0, max_base_quality).to(device)
+    validation_cigar_encodings = validation_batch['cigar_encodings'].to(device)
     del validation_batch
 
     # Iterate through data
@@ -546,16 +529,16 @@ def main():
                 replace_rate=proportion_random,
                 kernel_size=kernel_size, split=0.5
             )[-1]
-            # replaced_cigar = apply_masking_with_consistent_replacements(
-            #     nucleotide_sequences, input_embedding.nucleotide_embeddings.mask_index,
-            #     rate=corruption_rate, mask_rate=mask_rate,
-            #     replace_rate=proportion_random,
-            #     kernel_size=kernel_size, split=0.5
-            # )[-1]
+            replaced_cigar = apply_masking_with_consistent_replacements(
+                nucleotide_sequences, input_embedding.nucleotide_embeddings.mask_index,
+                rate=corruption_rate, mask_rate=mask_rate,
+                replace_rate=proportion_random,
+                kernel_size=kernel_size, split=0.5
+            )[-1]
 
             # remove any overlap from replacement masks and the masked indices.
             replaced_bases[masked_indices] = False
-            # replaced_cigar[masked_indices] = False
+            replaced_cigar[masked_indices] = False
 
             num_replaced = replaced_indices.sum().item()
 
@@ -563,9 +546,9 @@ def main():
             masked_cigar_encodings[masked_indices] = input_embedding.cigar_embeddings.mask_index
             masked_cigar_encodings[~valid_mask] = input_embedding.cigar_embeddings.padding_idx
             # replace the masked indices with num_replaced random indices
-            # masked_cigar_encodings[replaced_cigar] = torch.randint(
-            #     0, 4, (num_replaced,), dtype=torch.int32, device=device
-            # )
+            masked_cigar_encodings[replaced_cigar] = torch.randint(
+                0, 4, (num_replaced,), dtype=torch.int32, device=device
+            )
             masked_base_qualities = base_qualities.clone().to(device)
             masked_base_qualities[replaced_bases] = torch.randint(
                 0, 45, (num_replaced,), dtype=torch.int32, device=device
@@ -590,6 +573,9 @@ def main():
             base_quality_output = base_quality_classifier(
                 output
             )
+            cigar_output = cigar_classifier(
+                output
+            )
             output = classifier(output)
 
             masked_accuracy = mlm_accuracy(
@@ -609,6 +595,11 @@ def main():
                 base_qualities[masked_indices | replaced_bases],
                 scale_factor=1
             )
+            cigar_loss = cigar_loss_fn(
+                cigar_output[masked_indices | replaced_cigar],
+                cigar_encodings[masked_indices | replaced_cigar],
+                scale_factor=1
+            )
 
             train_perplexity = calculate_perplexity(
                 output[masked_indices | replaced_indices],
@@ -620,7 +611,12 @@ def main():
                 base_qualities[masked_indices | replaced_bases]
             )
 
-            loss = identity_loss + base_quality_loss
+            train_cigar_perplexity = calculate_perplexity(
+                cigar_output[masked_indices | replaced_cigar],
+                cigar_encodings[masked_indices | replaced_cigar]
+            )
+
+            loss = identity_loss + base_quality_loss + cigar_loss
             optimiser.zero_grad()
             loss.backward()
 
@@ -664,6 +660,9 @@ def main():
                 val_pred_base_quality = base_quality_classifier(
                     val_output
                 )
+                val_pred_cigar = cigar_classifier(
+                    val_output
+                )
 
                 val_identity_loss = loss_fn(
                     val_pred_nucleotide[
@@ -674,13 +673,28 @@ def main():
                 )
                 val_base_quality_loss = metric_loss_fn(
                     val_pred_base_quality[
-                        validation_masked_indices | validation_replaced_indices],
+                        validation_masked_indices |
+                        validation_replaced_base_qualities
+                    ],
                     validation_base_qualities[
-                        validation_masked_indices | validation_replaced_indices],
+                        validation_masked_indices |
+                        validation_replaced_base_qualities
+                    ],
+                    scale_factor=1
+                )
+                val_cigar_loss = cigar_loss_fn(
+                    val_pred_cigar[
+                        validation_masked_indices |
+                        validation_replaced_cigar_encodings
+                    ],
+                    validation_cigar_encodings[
+                        validation_masked_indices |
+                        validation_replaced_cigar_encodings
+                    ],
                     scale_factor=1
                 )
 
-                val_loss = val_identity_loss + val_base_quality_loss
+                val_loss = val_identity_loss + val_base_quality_loss + val_cigar_loss
 
                 # Compute validation statistics
                 val_masked_accuracy = mlm_accuracy(
@@ -705,9 +719,24 @@ def main():
 
                 val_base_quality_perplexity = calculate_perplexity(
                     val_pred_base_quality[
-                        validation_masked_indices | validation_replaced_indices],
+                        validation_masked_indices |
+                        validation_replaced_base_qualities
+                    ],
                     validation_base_qualities[
-                        validation_masked_indices | validation_replaced_indices]
+                        validation_masked_indices |
+                        validation_replaced_base_qualities
+                    ]
+                )
+
+                val_cigar_perplexity = calculate_perplexity(
+                    val_pred_cigar[
+                        validation_masked_indices |
+                        validation_replaced_cigar_encodings
+                    ],
+                    validation_cigar_encodings[
+                        validation_masked_indices |
+                        validation_replaced_cigar_encodings
+                    ]
                 )
 
         logging.debug(
@@ -740,13 +769,17 @@ def main():
                     "replaced_accuracy": replaced_accuracy,
                     "train_perplexity": train_perplexity,
                     "base_quality_loss": base_quality_loss.item(),
+                    "cigar_loss": cigar_loss.item(),
                     "val_loss": val_loss.item(),
                     "val_masked_accuracy": val_masked_accuracy,
                     "val_replaced_accuracy": val_replaced_accuracy,
                     "val_perplexity": val_perplexity,
                     "val_base_quality_loss": val_base_quality_loss.item(),
+                    "val_cigar_loss": val_cigar_loss.item(),
                     "train_base_quality_perplexity": train_base_quality_perplexity,
                     "val_base_quality_perplexity": val_base_quality_perplexity,
+                    "train_cigar_perplexity": train_cigar_perplexity,
+                    "val_cigar_perplexity": val_cigar_perplexity
                 },
                 step=i
             )
@@ -773,6 +806,8 @@ def main():
                     'classifier_state_dict': classifier.state_dict(),
                     'base_quality_classifier_state_dict':
                         base_quality_classifier.state_dict(),
+                    'cigar_classifier_state_dict':
+                        cigar_classifier.state_dict(),
                     'input_embedding_state_dict':
                         input_embedding.state_dict(),
                     'optimiser_state_dict': optimiser.state_dict(),
