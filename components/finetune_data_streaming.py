@@ -15,7 +15,7 @@ class FineTuningDataset(Dataset):
             base_quality_pad_idx,
             cigar_pad_idx, position_pad_idx, is_first_pad_idx,
             mapped_to_reverse_pad_idx,
-            max_read_length=100, **kwargs
+            max_read_length=151, **kwargs
     ):
         self.data = pd.read_csv(csv_path)
         self.artefact_bam_path = artefact_bam_path
@@ -195,7 +195,7 @@ def create_finetuning_dataloader(
         csv_path, artefact_bam_path, mutation_bam_path, batch_size,
         base_quality_pad_idx, cigar_pad_idx,
         position_pad_idx, is_first_pad_idx, mapped_to_reverse_pad_idx,
-        max_read_length=100, shuffle=True, num_workers=0, prefetch_factor=None,
+        max_read_length=151, shuffle=True, num_workers=0, prefetch_factor=None,
         collate_fn=collate_fn
 ):
     logging.info("Creating fine-tuning data loader.")
