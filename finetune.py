@@ -500,9 +500,8 @@ def main():
                     reference_embs
                 )
 
-                eff_class_num = get_effective_number(num_in_class)
-                eff_mut_num = get_effective_number(read_support)
-                loss_weight = 1 / (eff_class_num * eff_mut_num + 1e-12)
+                eff_class_num = get_effective_number(read_support * num_in_class)
+                loss_weight = 1 / (eff_class_num)
 
                 alphas = alphas.squeeze(-1)
                 betas = betas.squeeze(-1)

@@ -546,12 +546,16 @@ def main():
             masked_cigar_encodings[masked_indices] = input_embedding.cigar_embeddings.mask_index
             masked_cigar_encodings[~valid_mask] = input_embedding.cigar_embeddings.padding_idx
             # replace the masked indices with num_replaced random indices
+            num_replaced_cigar = replaced_cigar.sum().item()
             masked_cigar_encodings[replaced_cigar] = torch.randint(
-                0, 4, (num_replaced,), dtype=torch.int32, device=device
+                0, 4, (num_replaced_cigar,), dtype=torch.int32, device=device
             )
+
             masked_base_qualities = base_qualities.clone().to(device)
+            masked_base_qualities[masked_indices] = input_embedding.base_quality_embeddings.mask_idx
+            num_replaced_bases = replaced_bases.sum().item()
             masked_base_qualities[replaced_bases] = torch.randint(
-                0, 45, (num_replaced,), dtype=torch.int32, device=device
+                0, 50, (num_replaced_bases,), dtype=torch.int32, device=device
             )
 
             masked_is_first = is_first.clone().to(device)

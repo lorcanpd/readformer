@@ -108,11 +108,13 @@ class CigarEmbeddingLayer(Module):
         num_cigar_ops = 5
         self.mask_index = num_cigar_ops + 1
         self.padding_idx = num_cigar_ops
+        self.num_embeddings = num_cigar_ops + 2
         self.embedding = nn.Embedding(
-            num_embeddings=num_cigar_ops + 2,
+            num_embeddings=self.num_embeddings,
             embedding_dim=embedding_dim,
             padding_idx=self.padding_idx,
         )
+
 
     def forward(self, inputs):
         """
@@ -163,7 +165,7 @@ class BaseQualityEmbeddingLayer(Module):
     :param max_quality:
         The maximum quality score.
     """
-    def __init__(self, embedding_dim, max_quality=40):
+    def __init__(self, embedding_dim, max_quality=50):
         super(BaseQualityEmbeddingLayer, self).__init__()
         self.max_quality = max_quality
 
@@ -405,9 +407,9 @@ class MatePairEmbeddingLayer(Module):
 
 
 class InputEmbeddingLayer(Module):
-    def __init__(self, embedding_dim, max_quality=40):
+    def __init__(self, embedding_dim, max_quality=50):
         """
-        Initializes the combined input embedding layer, which includes
+        Initialises the combined input embedding layer, which includes
         all individual embedding layers and a gating mechanism based on SwiGLU.
 
         :param embedding_dim:

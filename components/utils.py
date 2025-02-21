@@ -226,11 +226,20 @@ def load_validation_tensors(validation_dir):
     """Load validation tensors from the specified directory."""
     tensor_dict = {}
     tensor_names = [
-        'positions', 'valid_positions',
-        'masked_sequences', 'masked_cigar_encodings',
-        'masked_base_qualities', 'masked_is_first', 'masked_mapped_to_reverse',
-        'masked_indices', 'replaced_indices',
-        'nucleotide_sequences', 'base_qualities'
+        'positions',
+        'valid_positions',
+        'masked_sequences',
+        'masked_cigar_encodings',
+        'masked_base_qualities',
+        'masked_is_first',
+        'masked_mapped_to_reverse',
+        'masked_indices',
+        'replaced_indices',
+        'replaced_base_qual',
+        'replaced_cigar',
+        'nucleotide_sequences',
+        'base_qualities',
+        'cigar_encodings'
     ]
 
     for name in tensor_names:
