@@ -187,10 +187,9 @@ class PredictionWriter:
         ])
 
     def update(
-            self, values, chr_=None, pos=None, ref=None, alt=None,
+            self, alpha, beta, chr_=None, pos=None, ref=None, alt=None,
             mapped_to_reverse=None, read_id=None, mutation_type=None
     ):
-        alpha, beta = values
         batch_size = alpha.shape[0]
         alpha = alpha.detach().cpu().numpy()
         beta = beta.detach().cpu().numpy()
@@ -315,10 +314,17 @@ def main():
 
             idx = torch.nonzero(positions == mutation_positions, as_tuple=True)
 
-            if idx[0].shape[0] != nucleotide_sequences.size(0):
-                keep = set(idx[0].tolist())
-                batch_idx = torch.arange(nucleotide_sequences.size(0), device=device)
-                mask = torch.tensor([i in keep for i in batch_idx], device=device)
+            batch_size = nucleotide_sequences.size(0)
+            if idx[0].numel() == batch_size:
+                mask = torch.ones(batch_size, dtype=torch.bool, device=device)
+            else:
+                keep_rows = set(idx[0].tolist())
+                batch_idx = torch.arange(batch_size, device=device)
+                mask = torch.tensor(
+                    [i in keep_rows for i in batch_idx],
+                    dtype=torch.bool,
+                    device=device
+                )
 
                 nucleotide_sequences = nucleotide_sequences[mask]
                 base_qualities = base_qualities[mask]
@@ -328,6 +334,7 @@ def main():
                 positions = positions[mask]
                 if reference is not None:
                     reference = reference[mask]
+                mutation_positions = mutation_positions[mask]
 
             del batch
 
@@ -340,6 +347,11 @@ def main():
             readformer_out = readformer_model(
                 model_input, positions
             )
+
+            row_idx = torch.arange(readformer_out.size(0), device=device)
+            col_idx = (positions == mutation_positions).nonzero(as_tuple=False)[:, 1]
+            selected_h = readformer_out[row_idx, col_idx]
+
             if args.no_reference:
                 reference_embs = None
             else:
@@ -375,28 +387,20 @@ def main():
             #
             # classifier_input = readformer_out[indices]
 
-            alpha, beta = classifier(readformer_out[idx], reference_embs)
+            alpha, beta = classifier(selected_h, reference_embs)
 
             # use the idx to remove the missing chr_, pos, ref, alt, is_reverse, read_id, mutation_type
 
-            idx_list = idx[0].tolist()
-
-            mut_pos_list = mutation_positions.tolist()
-
-            chr_ = [chr_[i] for i in idx_list]
-            mutation_positions = [
-                mut_pos_list[i] for i in idx_list
-            ]
-            ref = [ref[i] for i in idx_list]
-            alt = [alt[i] for i in idx_list]
-            is_reverse = [is_reverse[i] for i in idx_list]
-            read_id = [read_id[i] for i in idx_list]
-            mutation_type = [
-                mutation_type[i] for i in idx_list
-            ]
+            mask = mask.tolist()
+            chr_ = [c for c, k in zip(chr_, mask) if k]
+            ref = [r for r, k in zip(ref, mask) if k]
+            alt = [a for a, k in zip(alt, mask) if k]
+            is_reverse = [s for s, k in zip(is_reverse, mask) if k]
+            read_id = [rid for rid, k in zip(read_id, mask) if k]
+            mutation_type = [t for t, k in zip(mutation_type, mask) if k]
 
             writer.update(
-                (alpha.squeeze(-1), beta.squeeze(-1)), chr_=chr_,
+                alpha.squeeze(-1), beta.squeeze(-1), chr_=chr_,
                 pos=mutation_positions, ref=ref, alt=alt,
                 mapped_to_reverse=is_reverse, read_id=read_id,
                 mutation_type=mutation_type

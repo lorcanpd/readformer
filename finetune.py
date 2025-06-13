@@ -368,6 +368,7 @@ def main():
             pos = pos[mask]
             rs = rs[mask]
             val_lbl = val_lbl[mask]
+            mutp = mutp[mask]
             if ref is not None:
                 ref = ref[mask]
 
@@ -557,6 +558,7 @@ def main():
             pos = pos[mask]
             rs = rs[mask]
             lbl = lbl[mask]
+            mutpos = mutpos[mask]
             if ref is not None:
                 ref = ref[mask]
 

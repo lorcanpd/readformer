@@ -419,20 +419,27 @@ def main():
 
                     idx = torch.nonzero(positions == mutation_positions, as_tuple=True)
 
-                    if idx[0].shape[0] != nucleotide_sequences.size(0):
-                        keep = set(idx[0].tolist())
-                        batch_idx = torch.arange(nucleotide_sequences.size(0), device=device)
-                        mask = torch.tensor([i in keep for i in batch_idx], device=device)
+                    batch_size = nucleotide_sequences.size(0)
+                    if idx[0].numel() == batch_size:
+                        mask = torch.ones(batch_size, dtype=torch.bool, device=device)
+                    else:
+                        keep_rows = set(idx[0].tolist())
+                        batch_idx = torch.arange(batch_size, device=device)
+                        mask = torch.tensor(
+                            [i in keep_rows for i in batch_idx],
+                            dtype=torch.bool,
+                            device=device
+                        )
 
                         nucleotide_sequences = nucleotide_sequences[mask]
                         base_qualities = base_qualities[mask]
                         cigar_encoding = cigar_encoding[mask]
-                        is_first = is_first[mask]
-                        mapped_to_reverse = mapped_to_reverse[mask]
+                        is_first_flags = is_first_flags[mask]
+                        mapped_to_reverse_flags = mapped_to_reverse_flags[mask]
                         positions = positions[mask]
-                        labels = labels[mask]
                         if reference is not None:
                             reference = reference[mask]
+                        mutation_positions = mutation_positions[mask]
 
                     model_input = input_embedding(
                         nucleotide_sequences, cigar_encoding,
@@ -441,6 +448,11 @@ def main():
                     )
 
                     readformer_out = readformer_model(model_input, positions)
+
+                    row_idx = torch.arange(readformer_out.size(0), device=device)
+                    col_idx = (positions == mutation_positions).nonzero(as_tuple=False)[:, 1]
+                    selected_h = readformer_out[row_idx, col_idx]
+
                     if not args.no_reference:
                         reference_embs = ref_base_embedding(reference).squeeze(-2)
                     else:
@@ -468,27 +480,22 @@ def main():
                     #     is_reverse = [is_reverse[i] for i in remaining_indices.tolist()]
                     #     read_id = [read_id[i] for i in remaining_indices.tolist()]
 
-                    classifier_in = readformer_out[idx]
-
                     alphas, betas, = classifier(
-                        classifier_in,
+                        selected_h,
                         reference_embs
                     )
 
                     alphas = alphas.squeeze(-1)
                     betas = betas.squeeze(-1)
 
-                    # use idx to remove the chr_, mutation_positions, ref, alt, is_reverse, read_id
-                    idx_list = idx[0].tolist()
+                    mask = mask.tolist()
 
-                    mut_pos_list = mutation_positions.tolist()
+                    chr_ = [c for c, k in zip(chr_, mask) if k]
+                    ref = [r for r, k in zip(ref, mask) if k]
+                    alt = [a for a, k in zip(alt, mask) if k]
+                    is_reverse = [s for s, k in zip(is_reverse, mask) if k]
+                    read_id = [rid for rid, k in zip(read_id, mask) if k]
 
-                    chr_ = [chr_[i] for i in idx_list]
-                    mutation_positions = [mut_pos_list[i] for i in idx_list]
-                    ref = [ref[i] for i in idx_list]
-                    alt = [alt[i] for i in idx_list]
-                    is_reverse = [is_reverse[i] for i in idx_list]
-                    read_id = [read_id[i] for i in idx_list]
 
                     writer.write(
                         alphas.detach(),
