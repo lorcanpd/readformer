@@ -15,9 +15,12 @@ class PredictionDataset(Dataset):
             base_quality_pad_idx,
             cigar_pad_idx, position_pad_idx, is_first_pad_idx,
             mapped_to_reverse_pad_idx,
-            max_read_length=100, **kwargs
+            max_read_length=151, **kwargs
     ):
         self.data = pd.read_csv(csv_path)
+        self.data = self.data.drop_duplicates(
+            subset=['chrom', 'pos', 'ref', 'alt', 'read_id', 'mutation_type']
+        ).reset_index(drop=True)
         self.bam_path = bam_path
         self.max_read_length = max_read_length
         self.base_quality_pad_idx = base_quality_pad_idx

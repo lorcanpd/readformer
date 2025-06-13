@@ -23,7 +23,7 @@ def get_args():
     )
     parser.add_argument('--batch_size', type=int, default=256,
                         help='Batch size for validation data extraction.')
-    parser.add_argument('--max_sequence_length', type=int, default=100,
+    parser.add_argument('--max_sequence_length', type=int, default=151,
                         help='Maximum sequence length for data loading.')
     parser.add_argument('--min_read_quality', type=int, default=30,
                         help='Minimum read quality.')
@@ -123,13 +123,18 @@ def main():
     val_masked_cigar_encodings = validation_cigar_encodings.clone()
     val_masked_cigar_encodings[val_masked_indices] = input_embedding.cigar_embeddings.mask_index
     val_masked_cigar_encodings[~validation_valid_positions] = input_embedding.cigar_embeddings.padding_idx
-    val_masked_cigar_encodings[val_replaced_cigar] = torch.randint(
-        0, 4, (num_replaced,), dtype=torch.int32
+
+    num_replaced_cigar = (val_replaced_cigar & ~val_masked_indices).sum().item()
+    val_masked_cigar_encodings[val_replaced_cigar & ~val_masked_indices] = torch.randint(
+        0, 4, (num_replaced_cigar,), dtype=torch.int32
     )
 
     val_masked_base_qualities = validation_base_qualities.clone()
-    val_masked_base_qualities[val_replaced_bases] = torch.randint(
-        0, 45, (num_replaced,), dtype=torch.int32
+    # mask the base qualities
+    val_masked_base_qualities[val_masked_indices] = input_embedding.base_quality_embeddings.mask_idx
+    num_replaced_bases = (val_replaced_bases & ~val_masked_indices).sum().item()
+    val_masked_base_qualities[val_replaced_bases & ~val_masked_indices] = torch.randint(
+        0, 50, (num_replaced_bases,), dtype=torch.int32
     )
     # Masking and padding of base qualities is handled by the embedding layer
     # at the time of validation

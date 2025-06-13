@@ -2,7 +2,7 @@
 
 import argparse
 
-import pypdf.errors
+# import pypdf.errors
 import pysam
 import concurrent.futures
 from collections import defaultdict
@@ -126,6 +126,7 @@ def detect_chrom_prefix_fasta(fasta_file):
             if ref.startswith("chr"):
                 return "chr"
     return ""
+
 
 def read_bed_file(bed_file):
     """
@@ -551,6 +552,7 @@ def process_chunk(
             base_counts = defaultdict(int)
             read_bases = {}
             reads_at_pos = {}
+            read_positions = {}
             for pileupread in pileupcolumn.pileups:
                 if pileupread.is_del or pileupread.is_refskip:
                     continue
@@ -564,6 +566,7 @@ def process_chunk(
                 base_counts[base] += 1
                 read_bases[read.query_name] = base
                 reads_at_pos[read.query_name] = read  # Store the read
+                read_positions[read.query_name] = pileupread.query_position
 
             # Identify positions where alternate alleles are supported by exactly one read
             if len(base_counts) > 1:
@@ -593,7 +596,8 @@ def process_chunk(
                                             # Collect read and VCF record
                                             artifact_read = reads_at_pos[read_name]
                                             # Get the index of the base on the read
-                                            position_on_read = artifact_read.get_reference_positions().index(pos)
+                                            # position_on_read = artifact_read.get_reference_positions().index(pos)
+                                            position_on_read = read_positions[read_name]
 
                                             # Determine the 5' end of the read
                                             if artifact_read.is_reverse:
@@ -601,7 +605,7 @@ def process_chunk(
                                                 # within 100bp of the 5' end, which
                                                 # if the read is reversed is the end
                                                 # of the read
-                                                read_length = artifact_read.infer_query_length()
+                                                read_length = len(artifact_read.query_sequence)
                                                 if read_length - 100 > position_on_read:
                                                     continue
                                             else:
@@ -864,7 +868,7 @@ def assign_known_signatures(
             verbose=True,
             exclude_signature_subgroups=exclude_subgroups
         )
-    except pypdf.errors.DeprecationError:
+    except Exception as e:
         pass
 
 

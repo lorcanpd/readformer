@@ -87,7 +87,7 @@ def get_args():
         help='Directory to save validation tensors.', required=True
     )
     parser.add_argument(
-        '--max_read_length', type=int, default=100,
+        '--max_read_length', type=int, default=151,
         help='Maximum read length to consider.'
     )
     parser.add_argument(
@@ -95,13 +95,25 @@ def get_args():
         help='Enable debug logging.'
     )
 
+    parser.add_argument(
+        '--max_base_quality', type=int, default=50,
+        help='Maximum base quality value.'
+    )
+
+    parser.add_argument(
+        '--no_reference', action='store_true',
+        help='If set, do not use reference base embedding.'
+    )
+
     args = parser.parse_args()
     return args
 
 
+# TODO: Align this script with predict. A lot of redundancy.
+
 def instantiate_model(args, device):
     input_embedding = InputEmbeddingLayer(
-        args.emb_dim
+        args.emb_dim, args.max_base_quality
     ).to(device)
 
     readformer_model = Model(
@@ -170,27 +182,39 @@ def load_latest_checkpoint(args, device):
         input_embedding, readformer_model
     ) = instantiate_model(args, device)
 
-    ref_base_embedding = NucleotideEmbeddingLayer(
-        args.emb_dim, mlm_mode=True
-    ).to(device)
+    if not args.no_reference:
+        ref_base_embedding = NucleotideEmbeddingLayer(
+            args.emb_dim, mlm_mode=True
+        ).to(device)
+        ref_base_embedding.load_state_dict(checkpoint['ref_base_embedding_state_dict'])
+    else:
+        ref_base_embedding = None
 
     classifier = BetaDistributionClassifier(
-        input_dim=args.emb_dim, hidden_dim=args.emb_dim // 2
+        input_dim=args.emb_dim, hidden_dim=args.emb_dim // 2,
+        using_reference_embedding=not args.no_reference
     ).to(device)
 
     # Load state_dicts
     input_embedding.load_state_dict(checkpoint['input_embedding_state_dict'])
     readformer_model.load_state_dict(checkpoint['model_state_dict'])
-    ref_base_embedding.load_state_dict(checkpoint['ref_base_embedding_state_dict'])
     classifier.load_state_dict(checkpoint['classifier_state_dict'])
 
-    # Load the optimiser state
-    optimiser = AdamW(
-        list(input_embedding.parameters())
-        + list(readformer_model.parameters())
-        + list(ref_base_embedding.parameters())
-        + list(classifier.parameters())
-    )
+    if not args.no_reference:
+        # Load the optimiser state
+        optimiser = AdamW(
+            list(input_embedding.parameters())
+            + list(readformer_model.parameters())
+            + list(ref_base_embedding.parameters())
+            + list(classifier.parameters())
+        )
+    else:
+        # Load the optimiser state
+        optimiser = AdamW(
+            list(input_embedding.parameters())
+            + list(readformer_model.parameters())
+            + list(classifier.parameters())
+        )
     optimiser.load_state_dict(checkpoint['optimiser_state_dict'])
 
     # Get the epoch and iteration to be used to continue training and
@@ -272,11 +296,15 @@ def load_checkpoint_by_phase(args, device, phase):
     # Instantiate the model components
     try:
         input_embedding, readformer_model = instantiate_model(args, device)
-        ref_base_embedding = NucleotideEmbeddingLayer(
-            args.emb_dim, mlm_mode=True
-        ).to(device)
+        if not args.no_reference:
+            ref_base_embedding = NucleotideEmbeddingLayer(
+                args.emb_dim, mlm_mode=True
+            ).to(device)
+        else:
+            ref_base_embedding = None
         classifier = BetaDistributionClassifier(
-            input_dim=args.emb_dim, hidden_dim=args.emb_dim // 2
+            input_dim=args.emb_dim, hidden_dim=args.emb_dim // 2,
+            using_reference_embedding=not args.no_reference,
         ).to(device)
     except Exception as e:
         logging.error(f"Failed to instantiate model components: {e}")
@@ -286,7 +314,8 @@ def load_checkpoint_by_phase(args, device, phase):
     try:
         input_embedding.load_state_dict(checkpoint['input_embedding_state_dict'])
         readformer_model.load_state_dict(checkpoint['model_state_dict'])
-        ref_base_embedding.load_state_dict(checkpoint['ref_base_embedding_state_dict'])
+        if not args.no_reference:
+            ref_base_embedding.load_state_dict(checkpoint['ref_base_embedding_state_dict'])
         classifier.load_state_dict(checkpoint['classifier_state_dict'])
     except KeyError as e:
         logging.error(f"Missing key in checkpoint '{checkpoint_path}': {e}")
@@ -350,7 +379,7 @@ def main():
             max_read_length=args.max_read_length,
             shuffle=False,
             # num_workers=0
-            num_workers=get_allocated_cpus() // 2,
+            num_workers=min(get_allocated_cpus() - 1, 8),
             prefetch_factor=1
         )
 
@@ -362,7 +391,8 @@ def main():
                 input_embedding.eval()
                 readformer_model.eval()
                 classifier.eval()
-                ref_base_embedding.eval()
+                if not args.no_reference:
+                    ref_base_embedding.eval()
 
                 for validation_batch in validation_dataset:
                     nucleotide_sequences = validation_batch['nucleotide_sequences'].to(device)
@@ -371,10 +401,11 @@ def main():
                     is_first = validation_batch['is_first'].to(device)
                     mapped_to_reverse = validation_batch['mapped_to_reverse'].to(device)
                     positions = validation_batch['positions'].to(device)
-                    read_support = validation_batch['read_support'].to(device)
-                    num_in_class = validation_batch['num_in_class'].to(device)
+                    # read_support = validation_batch['read_support'].to(device)
+                    # num_in_class = validation_batch['num_in_class'].to(device)
                     labels = validation_batch['labels'].to(device)
-                    reference = validation_batch['reference'].to(device)
+                    if not args.no_reference:
+                        reference = validation_batch['reference'].to(device)
                     mutation_positions = validation_batch['mut_pos'].to(device)
                     mutation_positions = torch.unsqueeze(mutation_positions, -1)
 
@@ -386,6 +417,23 @@ def main():
 
                     del validation_batch
 
+                    idx = torch.nonzero(positions == mutation_positions, as_tuple=True)
+
+                    if idx[0].shape[0] != nucleotide_sequences.size(0):
+                        keep = set(idx[0].tolist())
+                        batch_idx = torch.arange(nucleotide_sequences.size(0), device=device)
+                        mask = torch.tensor([i in keep for i in batch_idx], device=device)
+
+                        nucleotide_sequences = nucleotide_sequences[mask]
+                        base_qualities = base_qualities[mask]
+                        cigar_encoding = cigar_encoding[mask]
+                        is_first = is_first[mask]
+                        mapped_to_reverse = mapped_to_reverse[mask]
+                        positions = positions[mask]
+                        labels = labels[mask]
+                        if reference is not None:
+                            reference = reference[mask]
+
                     model_input = input_embedding(
                         nucleotide_sequences, cigar_encoding,
                         base_qualities,
@@ -393,39 +441,54 @@ def main():
                     )
 
                     readformer_out = readformer_model(model_input, positions)
-                    reference_embs = ref_base_embedding(reference).squeeze(-2)
+                    if not args.no_reference:
+                        reference_embs = ref_base_embedding(reference).squeeze(-2)
+                    else:
+                        reference_embs = None
 
                     # Get indices of the mutation positions.
-                    indices = torch.nonzero(positions == mutation_positions, as_tuple=True)
+                    # indices = torch.nonzero(positions == mutation_positions, as_tuple=True)
+                    #
+                    # if indices[0].shape[0] != args.batch_size:
+                    #     # Figure out which sequence is missing
+                    #     missing_indices = torch.tensor(
+                    #         list(set(range(args.batch_size)) - set(indices[0].tolist())))
+                    #     remaining_indices = torch.tensor(
+                    #         list(set(range(args.batch_size)) - set(missing_indices.tolist())))
+                    #
+                    #     # keep references and labels of the remaining sequences
+                    #     if not args.no_reference:
+                    #         reference_embs = reference_embs[remaining_indices]
+                    #     labels = labels[remaining_indices]
+                    #     # Get list from tensor of missing indices
+                    #     chr_ = [chr_[i] for i in remaining_indices.tolist()]
+                    #     mutation_positions = [mutation_positions.tolist()[i] for i in remaining_indices.tolist()]
+                    #     ref = [ref[i] for i in remaining_indices.tolist()]
+                    #     alt = [alt[i] for i in remaining_indices.tolist()]
+                    #     is_reverse = [is_reverse[i] for i in remaining_indices.tolist()]
+                    #     read_id = [read_id[i] for i in remaining_indices.tolist()]
 
-                    if indices[0].shape[0] != args.batch_size:
-                        # Figure out which sequence is missing
-                        missing_indices = torch.tensor(
-                            list(set(range(args.batch_size)) - set(indices[0].tolist())))
-                        remaining_indices = torch.tensor(
-                            list(set(range(args.batch_size)) - set(missing_indices.tolist())))
+                    classifier_in = readformer_out[idx]
 
-                        # keep references and labels of the remaining sequences
-
-                        reference_embs = reference_embs[remaining_indices]
-                        labels = labels[remaining_indices]
-                        # Get list from tensor of missing indices
-                        chr_ = [chr_[i] for i in remaining_indices.tolist()]
-                        mutation_positions = [mutation_positions.tolist()[i] for i in remaining_indices.tolist()]
-                        ref = [ref[i] for i in remaining_indices.tolist()]
-                        alt = [alt[i] for i in remaining_indices.tolist()]
-                        is_reverse = [is_reverse[i] for i in remaining_indices.tolist()]
-                        read_id = [read_id[i] for i in remaining_indices.tolist()]
-
-                    classifier_in = readformer_out[indices]
-
-                    alphas, betas, _, _ = classifier(
+                    alphas, betas, = classifier(
                         classifier_in,
                         reference_embs
                     )
 
                     alphas = alphas.squeeze(-1)
                     betas = betas.squeeze(-1)
+
+                    # use idx to remove the chr_, mutation_positions, ref, alt, is_reverse, read_id
+                    idx_list = idx[0].tolist()
+
+                    mut_pos_list = mutation_positions.tolist()
+
+                    chr_ = [chr_[i] for i in idx_list]
+                    mutation_positions = [mut_pos_list[i] for i in idx_list]
+                    ref = [ref[i] for i in idx_list]
+                    alt = [alt[i] for i in idx_list]
+                    is_reverse = [is_reverse[i] for i in idx_list]
+                    read_id = [read_id[i] for i in idx_list]
 
                     writer.write(
                         alphas.detach(),

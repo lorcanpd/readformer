@@ -157,6 +157,11 @@ def get_args():
         help='Name of the wandb project.'
     )
 
+    parser.add_argument(
+        '--max_base_quality', type=int, default=50,
+        help='Maximum base quality.'
+    )
+
     args = parser.parse_args()
     return args
 
@@ -239,7 +244,7 @@ def main():
         f"{args.model_dir}/{emb_dim}d_{num_layers}l_{num_hyena}h_"
         f"{num_attention}a_{num_heads}h.pth"
     )
-    max_base_quality = 40
+    max_base_quality = args.max_base_quality
 
     # Map the string logging level to the actual logging level
     numeric_level = getattr(logging, args.logging.upper(), None)
@@ -540,6 +545,8 @@ def main():
             replaced_bases[masked_indices] = False
             replaced_cigar[masked_indices] = False
 
+
+
             num_replaced = replaced_indices.sum().item()
 
             masked_cigar_encodings = cigar_encodings.clone().to(device)
@@ -583,41 +590,43 @@ def main():
             output = classifier(output)
 
             masked_accuracy = mlm_accuracy(
-                output[masked_indices], nucleotide_sequences[masked_indices]
+                output[masked_indices & valid_mask],
+                nucleotide_sequences[masked_indices & valid_mask]
             )
             replaced_accuracy = mlm_accuracy(
-                output[replaced_indices], nucleotide_sequences[replaced_indices]
+                output[replaced_indices & valid_mask],
+                nucleotide_sequences[replaced_indices & valid_mask]
             )
 
             identity_loss = loss_fn(
-                output[masked_indices | replaced_indices],
-                nucleotide_sequences[masked_indices | replaced_indices],
+                output[(masked_indices | replaced_indices) & valid_mask],
+                nucleotide_sequences[(masked_indices | replaced_indices) & valid_mask],
                 scale_factor=1
             )
             base_quality_loss = metric_loss_fn(
-                base_quality_output[masked_indices | replaced_bases],
-                base_qualities[masked_indices | replaced_bases],
+                base_quality_output[(masked_indices | replaced_bases) & valid_mask],
+                base_qualities[(masked_indices | replaced_bases) & valid_mask],
                 scale_factor=1
             )
             cigar_loss = cigar_loss_fn(
-                cigar_output[masked_indices | replaced_cigar],
-                cigar_encodings[masked_indices | replaced_cigar],
+                cigar_output[(masked_indices | replaced_cigar) & valid_mask],
+                cigar_encodings[(masked_indices | replaced_cigar) & valid_mask],
                 scale_factor=1
             )
 
             train_perplexity = calculate_perplexity(
-                output[masked_indices | replaced_indices],
-                nucleotide_sequences[masked_indices | replaced_indices]
+                output[(masked_indices | replaced_indices) & valid_mask],
+                nucleotide_sequences[(masked_indices | replaced_indices) & valid_mask]
             )
 
             train_base_quality_perplexity = calculate_perplexity(
-                base_quality_output[masked_indices | replaced_bases],
-                base_qualities[masked_indices | replaced_bases]
+                base_quality_output[(masked_indices | replaced_bases) & valid_mask],
+                base_qualities[(masked_indices | replaced_bases) & valid_mask]
             )
 
             train_cigar_perplexity = calculate_perplexity(
-                cigar_output[masked_indices | replaced_cigar],
-                cigar_encodings[masked_indices | replaced_cigar]
+                cigar_output[(masked_indices | replaced_cigar) & valid_mask],
+                cigar_encodings[(masked_indices | replaced_cigar) & valid_mask]
             )
 
             loss = identity_loss + base_quality_loss + cigar_loss
@@ -670,30 +679,31 @@ def main():
 
                 val_identity_loss = loss_fn(
                     val_pred_nucleotide[
-                        validation_masked_indices | validation_replaced_indices],
+                        (validation_masked_indices | validation_replaced_indices) & validation_valid_mask],
                     validation_nucleotide_sequences[
-                        validation_masked_indices | validation_replaced_indices],
+                        (validation_masked_indices | validation_replaced_indices) & validation_valid_mask
+                        ],
                     scale_factor=1
                 )
                 val_base_quality_loss = metric_loss_fn(
                     val_pred_base_quality[
-                        validation_masked_indices |
-                        validation_replaced_base_qualities
+                        (validation_masked_indices |
+                         validation_replaced_base_qualities) & validation_valid_mask
                     ],
                     validation_base_qualities[
-                        validation_masked_indices |
-                        validation_replaced_base_qualities
+                        (validation_masked_indices |
+                        validation_replaced_base_qualities) & validation_valid_mask
                     ],
                     scale_factor=1
                 )
                 val_cigar_loss = cigar_loss_fn(
                     val_pred_cigar[
-                        validation_masked_indices |
-                        validation_replaced_cigar_encodings
+                        (validation_masked_indices |
+                         validation_replaced_cigar_encodings) & validation_valid_mask
                     ],
                     validation_cigar_encodings[
-                        validation_masked_indices |
-                        validation_replaced_cigar_encodings
+                        (validation_masked_indices |
+                        validation_replaced_cigar_encodings) & validation_valid_mask
                     ],
                     scale_factor=1
                 )
@@ -703,43 +713,46 @@ def main():
                 # Compute validation statistics
                 val_masked_accuracy = mlm_accuracy(
                     val_pred_nucleotide[
-                        validation_masked_indices | validation_replaced_indices],
+                        validation_masked_indices & validation_valid_mask],
                     validation_nucleotide_sequences[
-                        validation_masked_indices | validation_replaced_indices]
+                            validation_masked_indices & validation_valid_mask
+                        ]
                 )
                 val_replaced_accuracy = mlm_accuracy(
                     val_pred_nucleotide[
                         validation_valid_mask & validation_replaced_indices],
                     validation_nucleotide_sequences[
-                        validation_valid_mask & validation_replaced_indices]
+                            validation_valid_mask & validation_replaced_indices
+                        ]
                 )
 
                 val_perplexity = calculate_perplexity(
                     val_pred_nucleotide[
-                        validation_masked_indices | validation_replaced_indices],
+                        (validation_masked_indices | validation_replaced_indices) & validation_valid_mask],
                     validation_nucleotide_sequences[
-                        validation_masked_indices | validation_replaced_indices]
+                            (validation_masked_indices | validation_replaced_indices) & validation_valid_mask
+                        ]
                 )
 
                 val_base_quality_perplexity = calculate_perplexity(
                     val_pred_base_quality[
-                        validation_masked_indices |
-                        validation_replaced_base_qualities
+                        (validation_masked_indices |
+                         validation_replaced_base_qualities) & validation_valid_mask
                     ],
                     validation_base_qualities[
-                        validation_masked_indices |
-                        validation_replaced_base_qualities
+                        (validation_masked_indices |
+                         validation_replaced_base_qualities) & validation_valid_mask
                     ]
                 )
 
                 val_cigar_perplexity = calculate_perplexity(
                     val_pred_cigar[
-                        validation_masked_indices |
-                        validation_replaced_cigar_encodings
+                        (validation_masked_indices |
+                         validation_replaced_cigar_encodings) & validation_valid_mask
                     ],
                     validation_cigar_encodings[
-                        validation_masked_indices |
-                        validation_replaced_cigar_encodings
+                        (validation_masked_indices |
+                         validation_replaced_cigar_encodings) & validation_valid_mask
                     ]
                 )
 

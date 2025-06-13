@@ -168,4 +168,4 @@ def plot_dimension_pairs(embeddings, rotated_embeddings, loci_positions):
     axs[-1].legend()
 
     plt.tight_layout()
-    plt.show()
+    # plt.show()

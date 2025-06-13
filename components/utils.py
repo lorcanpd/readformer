@@ -262,9 +262,12 @@ def get_effective_number(n_samples):
     effective_num = torch.ones_like(n_samples, dtype=torch.float32)
     mask = n_samples > 1
     beta = (n_samples[mask] - 1) / n_samples[mask]
+    # clamp beta to avoid numerical instability
+    beta = torch.clamp(beta, max=0.99)
     numerator = 1 - torch.exp(n_samples[mask] * torch.log(beta))
     denominator = 1 - beta
     effective_num[mask] = numerator / denominator
+
     return effective_num
 
 
@@ -286,7 +289,7 @@ def get_layerwise_param_groups(model, max_lr, min_lr):
         The minimum learning rate to assign to the bottom-most layer.
 
     :return:
-        A list of parameter groups (dicts) suitable for passing to the optimizer.
+        A list of parameter groups (dicts) suitable for passing to the optimiser.
     """
 
     # Step 1: Flatten all layers into a single list

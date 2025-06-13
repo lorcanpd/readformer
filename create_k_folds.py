@@ -7,13 +7,16 @@ import csv
 
 from components.extract_reads import extract_read_by_id, decode_orientation_flags
 
+# TODO: Adapt this for the nanoseq data one extracted.
+
 # Configuration
 K_FOLDS = 5
-MUTATIONS_VCF_PATH = 'TEST_DATA/fine_tuning/mutation_reads.vcf.gz'
-MUTATIONS_BAM_PATH = 'TEST_DATA/fine_tuning/mutation_reads.bam'
-ARTEFACTS_VCF_PATH = 'TEST_DATA/fine_tuning/HG002_artefacts_cleaned.vcf.gz'
-ARTEFACTS_BAM_PATH = 'TEST_DATA/fine_tuning/HG002_artefacts.bam'
+MUTATIONS_VCF_PATH = 'TEST_DATA/fine_tuning/mutations.vcf.gz'
+MUTATIONS_BAM_PATH = 'TEST_DATA/fine_tuning/mutations.bam'
+ARTEFACTS_VCF_PATH = 'TEST_DATA/fine_tuning/artefacts.vcf.gz'
+ARTEFACTS_BAM_PATH = 'TEST_DATA/fine_tuning/artefacts.bam'
 OUTPUT_DIR = 'TEST_DATA/fine_tuning/cross_validation_splits'
+REFERENCE_FASTA = 'reference/hs37d5.fa.gz'
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 
@@ -25,52 +28,44 @@ def get_fold_id(identifier, k=K_FOLDS):
     return int(hash_digest, 16) % k
 
 
-# def count_entries_per_fold(vcf_path, k=K_FOLDS):
-#     """
-#     Count the number of entries per fold.
-#     """
-#     counts = {fold: 0 for fold in range(k)}
-#     vcf_in = pysam.VariantFile(vcf_path)
-#     for record in vcf_in:
-#         if 'READ_IDS' in record.info:
-#             chrom = record.chrom
-#             pos = record.pos
-#             ref = record.ref
-#             alt = ','.join([str(a) for a in record.alts])
-#             mutation_id = f"{chrom}:{pos}:{ref}>{alt}"
-#             fold_id = get_fold_id(mutation_id)
-#             counts[fold_id] += 1
-#         else:
-#             read_id = record.info.get(
-#                 'ILLUMINA_READ_NAME', [])[0]
-#             if read_id:
-#                 fold_id = get_fold_id(read_id)
-#                 counts[fold_id] += 1
-#     return counts
+def get_mutation_type(chrom, pos, ref, alt, ref_fasta):
+    """
+    Get the mutation type from the reference FASTA.
+    """
+    # get the sequence of the reference genome
+    ref_seq = ref_fasta.fetch(chrom, pos - 1, pos + 2)
+    assert ref.upper() == ref_seq[1].upper(), (
+        f"Reference base {ref} does not match the reference genome "
+        f"{ref_seq[1]} at {chrom}:{pos}"
+    )
+    # get the trinucleotide context
+    trinucleotide_context = ref_seq[0] + ref_seq[1] + ref_seq[2] + alt
+    return trinucleotide_context
 
 
-def process_mutations_vcf(vcf_path, output_dir, k=K_FOLDS):
+def process_vcf(vcf_path, bam_path, output_dir, category, k=K_FOLDS):
     """
     Process mutations VCF and assign each mutation to a fold.
     """
-    print("Processing Mutations VCF...")
+    ref_fasta = pysam.FastaFile(REFERENCE_FASTA)
+    print(f"Processing {category} VCF...")
     writers = {}
     files = {}
     headers = [
         'CHROM', 'POS', 'ID', 'REF', 'ALT', 'READ_ID', 'mapped_to_reverse',
-        'read_support',
+        'read_support', 'mutation_type'
     ]
     for fold in range(k):
-        out_path = os.path.join(output_dir, f'mutations_fold_{fold}.csv')
+        out_path = os.path.join(output_dir, f'{category}_fold_{fold}.csv')
         files[fold] = open(out_path, 'w', newline='')
         writers[fold] = csv.writer(files[fold])
 
         writers[fold].writerow(headers)
 
     vcf_in = pysam.VariantFile(vcf_path)
-    bam_file = pysam.AlignmentFile(MUTATIONS_BAM_PATH, 'rb')
+    bam_file = pysam.AlignmentFile(bam_path, 'rb')
 
-    for record in tqdm(vcf_in, desc="Mutations"):
+    for record in tqdm(vcf_in, desc=category):
         chrom = record.chrom
         pos = record.pos - 1
         ref = record.ref
@@ -107,6 +102,7 @@ def process_mutations_vcf(vcf_path, output_dir, k=K_FOLDS):
 
                 # get aligned pairs
                 aligned_pairs = read.get_aligned_pairs(matches_only=False)
+
                 base_in_read = None
 
                 for query_pos, ref_pos in aligned_pairs:
@@ -114,6 +110,9 @@ def process_mutations_vcf(vcf_path, output_dir, k=K_FOLDS):
                         if query_pos is not None:
                             base_in_read = read.query_sequence[query_pos]
                         break
+
+                if base_in_read is None:
+                    continue
 
                 if base_in_read.upper() != alt.upper():
                     # Due to bug in the extraction code.
@@ -131,11 +130,16 @@ def process_mutations_vcf(vcf_path, output_dir, k=K_FOLDS):
             else:
                 continue
 
+        mutation_type = get_mutation_type(chrom, pos, ref, alt, ref_fasta)
+
         for row in rows_to_write:
             if row[-1]:
                 row.append(num_reverse)
             else:
                 row.append(num_forward)
+
+            row.append(mutation_type)
+
             writers[fold_id].writerow(row)
 
     for fold in range(k):
@@ -198,80 +202,87 @@ def process_mutations_vcf(vcf_path, output_dir, k=K_FOLDS):
 #     # # counts = count_entries_per_fold(vcf_path, k)
 #     # return counts
 
-def process_artefacts_vcf(vcf_path, output_dir, k=K_FOLDS):
-    """
-    Process artefacts VCF and assign each artefact to a fold.
-    """
-    print("Processing Artefacts VCF...")
-    writers = {}
-    files = {}
-    headers = [
-        'CHROM', 'POS', 'ID', 'REF', 'ALT', 'READ_ID', 'mapped_to_reverse',
-        'read_support',
-    ]
-    for fold in range(k):
-        out_path = os.path.join(
-            output_dir, f'artefacts_fold_{fold}.csv')
-        files[fold] = open(out_path, 'w', newline='')
-        writers[fold] = csv.writer(files[fold])
-        writers[fold].writerow(headers)
-
-    vcf_in = pysam.VariantFile(vcf_path)
-    bam_file = pysam.AlignmentFile(ARTEFACTS_BAM_PATH, 'rb')
-
-    # Create a cache to store reads at positions
-    position_cache = {}
-
-    for record in tqdm(vcf_in, desc="Artefacts"):
-        chrom = record.chrom
-        pos = record.pos - 1  # VCF is 1-based, so we subtract 1 for 0-based used by BAM
-        ref = record.ref
-        alt = ','.join([str(a) for a in record.alts])
-        read_id = record.info.get('ILLUMINA_READ_NAME')
-
-        if not read_id:
-            continue
-
-        fold_id = get_fold_id(read_id)
-
-        # Normalise contig names if necessary
-        if chrom not in bam_file.references:
-            adjusted_chrom = 'chr' + chrom
-            if adjusted_chrom not in bam_file.references:
-                print(f"Contig {chrom} not found in BAM file.")
-                continue
-        else:
-            adjusted_chrom = chrom
-
-        # Use a cache to avoid fetching the same position multiple times
-        cache_key = (adjusted_chrom, pos)
-        if cache_key in position_cache:
-            read_id_to_read = position_cache[cache_key]
-        else:
-            # Fetch all reads overlapping the position once
-            try:
-                reads_at_pos = bam_file.fetch(adjusted_chrom, pos, pos + 1)
-            except ValueError as e:
-                print(f"Error fetching reads for {adjusted_chrom}:{pos} - {e}")
-                continue
-            read_id_to_read = {read.query_name: read for read in reads_at_pos}
-            position_cache[cache_key] = read_id_to_read
-
-        read = read_id_to_read.get(read_id)
-        if read is not None:
-            mapped_to_reverse = read.is_reverse
-
-            row = [
-                chrom, pos, '.', ref, alt, read_id, mapped_to_reverse, 1
-            ]
-            writers[fold_id].writerow(row)
-        else:
-            # Read not found; could be due to a mismatch or the read not overlapping the position
-            continue
-
-    bam_file.close()
-    for fold in range(k):
-        files[fold].close()
+# def process_artefacts_vcf(vcf_path, output_dir, k=K_FOLDS):
+#     """
+#     Process artefacts VCF and assign each artefact to a fold.
+#     """
+#     print("Processing Artefacts VCF...")
+#     writers = {}
+#     files = {}
+#     headers = [
+#         'CHROM', 'POS', 'ID', 'REF', 'ALT', 'READ_ID', 'mapped_to_reverse',
+#         'read_support',
+#     ]
+#     for fold in range(k):
+#         out_path = os.path.join(
+#             output_dir, f'artefacts_fold_{fold}.csv')
+#         files[fold] = open(out_path, 'w', newline='')
+#         writers[fold] = csv.writer(files[fold])
+#         writers[fold].writerow(headers)
+#
+#     vcf_in = pysam.VariantFile(vcf_path)
+#     bam_file = pysam.AlignmentFile(ARTEFACTS_BAM_PATH, 'rb')
+#
+#     # Create a cache to store reads at positions
+#     position_cache = {}
+#
+#     for record in tqdm(vcf_in, desc="Artefacts"):
+#         illumina_forward = record.info.get('ILLUMINA_FORWARD', 0)
+#         illumina_reverse = record.info.get('ILLUMINA_REVERSE', 0)
+#         # if record has support on both strands, skip it
+#         if illumina_forward > 0 and illumina_reverse > 0:
+#             continue
+#         chrom = record.chrom
+#         pos = record.pos - 1  # VCF is 1-based, so we subtract 1 for 0-based used by BAM
+#         ref = record.ref
+#         alt = ','.join([str(a) for a in record.alts])
+#         read_ids = record.info.get('READ_IDS', [])
+#
+#         if not read_ids:
+#             continue
+#
+#         for read_id in read_ids:
+#
+#             fold_id = get_fold_id(read_id)
+#
+#             # Normalise contig names if necessary
+#             if chrom not in bam_file.references:
+#                 adjusted_chrom = 'chr' + chrom
+#                 if adjusted_chrom not in bam_file.references:
+#                     print(f"Contig {chrom} not found in BAM file.")
+#                     continue
+#             else:
+#                 adjusted_chrom = chrom
+#
+#             # Use a cache to avoid fetching the same position multiple times
+#             cache_key = (adjusted_chrom, pos)
+#             if cache_key in position_cache:
+#                 read_id_to_read = position_cache[cache_key]
+#             else:
+#                 # Fetch all reads overlapping the position once
+#                 try:
+#                     reads_at_pos = bam_file.fetch(adjusted_chrom, pos, pos + 1)
+#                 except ValueError as e:
+#                     print(f"Error fetching reads for {adjusted_chrom}:{pos} - {e}")
+#                     continue
+#                 read_id_to_read = {read.query_name: read for read in reads_at_pos}
+#                 position_cache[cache_key] = read_id_to_read
+#
+#             read = read_id_to_read.get(read_id)
+#             if read is not None:
+#                 mapped_to_reverse = read.is_reverse
+#
+#                 row = [
+#                     chrom, pos, '.', ref, alt, read_id, mapped_to_reverse, 1
+#                 ]
+#                 writers[fold_id].writerow(row)
+#             else:
+#                 # Read not found; could be due to a mismatch or the read not overlapping the position
+#                 continue
+#
+#     bam_file.close()
+#     for fold in range(k):
+#         files[fold].close()
 
 
 def count_class_samples(output_dir, k=K_FOLDS):
@@ -281,9 +292,9 @@ def count_class_samples(output_dir, k=K_FOLDS):
 
     for fold in range(k):
         mutations_path = os.path.join(
-            output_dir, f'mutations_fold_{fold}.csv')
+            output_dir, f'mutation_fold_{fold}.csv')
         artefacts_path = os.path.join(
-            output_dir, f'artefacts_fold_{fold}.csv')
+            output_dir, f'artefact_fold_{fold}.csv')
 
         # Count the number of unique mutation IDs for mutations
         mutations_df = pd.read_csv(mutations_path)
@@ -294,9 +305,9 @@ def count_class_samples(output_dir, k=K_FOLDS):
 
         # Count the number of artefacts for artefacts
         artefacts_df = pd.read_csv(artefacts_path)
-        num_artefact_classes = len(artefacts_df)
+        num_artefact_classes = artefacts_df.groupby(
+            ['CHROM', 'POS', 'mapped_to_reverse']).ngroups
         artefact_class_counts[fold] = num_artefact_classes
-
 
     return mutation_class_counts, artefact_class_counts
 
@@ -313,8 +324,8 @@ def combine_fold_csvs(
         print(f"Combining CSVs for Fold {fold}...")
 
         # Paths to individual test CSVs
-        mutations_path = os.path.join(output_dir, f'mutations_fold_{fold}.csv')
-        artefacts_path = os.path.join(output_dir, f'artefacts_fold_{fold}.csv')
+        mutations_path = os.path.join(output_dir, f'mutation_fold_{fold}.csv')
+        artefacts_path = os.path.join(output_dir, f'artefact_fold_{fold}.csv')
         test_combined_path = os.path.join(output_dir, f'test_fold_{fold}.csv')
 
         # Paths to individual train CSVs (excluding current fold)
@@ -331,7 +342,9 @@ def combine_fold_csvs(
             # Write header with label
             header = [
                 'CHROM', 'POS', 'ID', 'REF', 'ALT', 'READ_ID',
-                'mapped_to_reverse', 'read_support', 'num_in_class', 'label'
+                'mapped_to_reverse', 'read_support', 'mutation_type',
+                'num_in_class',
+                'label'
             ]
             test_writer.writerow(header)
             train_writer.writerow(header)
@@ -366,7 +379,7 @@ def combine_fold_csvs(
 
                 # Write mutations train with label 1.0
                 mutations_train_path = os.path.join(
-                    output_dir, f'mutations_fold_{other_fold}.csv')
+                    output_dir, f'mutation_fold_{other_fold}.csv')
                 with open(mutations_train_path, 'r') as mut_train:
                     reader = csv.reader(mut_train)
                     next(reader)  # Skip header
@@ -377,7 +390,7 @@ def combine_fold_csvs(
 
                 # Write artefacts train with label 0.0
                 artefacts_train_path = os.path.join(
-                    output_dir, f'artefacts_fold_{other_fold}.csv')
+                    output_dir, f'artefact_fold_{other_fold}.csv')
                 with open(artefacts_train_path, 'r') as art_train:
                     reader = csv.reader(art_train)
                     next(reader)  # Skip header
@@ -392,10 +405,12 @@ def combine_fold_csvs(
 
 
 def main():
-    process_mutations_vcf(
-        MUTATIONS_VCF_PATH, OUTPUT_DIR, K_FOLDS)
-    process_artefacts_vcf(
-        ARTEFACTS_VCF_PATH, OUTPUT_DIR, K_FOLDS)
+    process_vcf(
+        MUTATIONS_VCF_PATH, MUTATIONS_BAM_PATH, OUTPUT_DIR,
+        "mutation", K_FOLDS)
+    process_vcf(
+        ARTEFACTS_VCF_PATH, ARTEFACTS_BAM_PATH, OUTPUT_DIR,
+        "artefact", K_FOLDS)
 
     # get class counts for each fold
     mutation_class_counts, artefect_class_counts = count_class_samples(

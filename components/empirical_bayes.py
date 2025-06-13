@@ -21,7 +21,8 @@ class EmpiricalBayes:
 
     def __init__(
             self, validation_output_dir, desired_fdr=0.01,
-            sample_size=None, random_state=42, with_ground_truth=False,
+            sample_size=None, random_state=42, alpha_prior=1.0,
+            beta_prior=1.0, with_ground_truth=False,
             fold=None, phase_index=None,
     ):
         """
@@ -46,6 +47,9 @@ class EmpiricalBayes:
         self.sample_size = sample_size
         self.random_state = random_state
         self.with_ground_truth = with_ground_truth
+
+        self.alpha_prior = alpha_prior
+        self.beta_prior = beta_prior
 
         # Construct the prediction file path
         if with_ground_truth:
@@ -139,6 +143,19 @@ class EmpiricalBayes:
         df = pd.read_csv(self.prediction_path)
         logging.info(f"Loaded prediction data from '{self.prediction_path}'.")
         self.df = df  # Store DataFrame as a class attribute
+        def is_canonical(chrom):
+            canonical_list = [f'{i}' for i in range(1, 23)] + ['X', 'Y']
+            return str(chrom) in canonical_list
+
+        df = df[df["chr"].apply(is_canonical)]
+
+        # drop duplicates in the chr pos alt and read_id columns
+        df.drop_duplicates(subset=["chr", "pos", "alt", "read_id"], inplace=True)
+
+        # add priors
+        df["alpha"] += self.alpha_prior
+        df["beta"] += self.beta_prior
+
         return df
 
     def compute_z_scores(self, df):
@@ -286,7 +303,7 @@ class EmpiricalBayes:
             df["called_mutation"] = False
 
         if self.with_ground_truth:
-            updated_filename = f"fold_{self.fold}_phase_{self.phase_index:03d}_epoch_{self.phase_index:03d}_predictions_with_zlfdr.csv"
+            updated_filename = f"fold_{self.fold}_phase_{self.phase_index:03d}_predictions_with_zlfdr.csv"
         else:
             updated_filename = "predictions_with_zlfdr.csv"
         updated_path = os.path.join(self.validation_output_dir, updated_filename)

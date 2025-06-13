@@ -79,6 +79,7 @@ class NucleotideEmbeddingLayer(Module):
             padding_idx=self.padding_idx,
         )
 
+
     def forward(self, inputs):
         """
         Maps the input nucleotide sequences to their embeddings.
@@ -165,7 +166,7 @@ class BaseQualityEmbeddingLayer(Module):
     :param max_quality:
         The maximum quality score.
     """
-    def __init__(self, embedding_dim, max_quality=50):
+    def __init__(self, embedding_dim, max_quality=40):
         super(BaseQualityEmbeddingLayer, self).__init__()
         self.max_quality = max_quality
 
@@ -407,7 +408,7 @@ class MatePairEmbeddingLayer(Module):
 
 
 class InputEmbeddingLayer(Module):
-    def __init__(self, embedding_dim, max_quality=50):
+    def __init__(self, embedding_dim, max_quality=40):
         """
         Initialises the combined input embedding layer, which includes
         all individual embedding layers and a gating mechanism based on SwiGLU.

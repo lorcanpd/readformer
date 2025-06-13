@@ -10,6 +10,7 @@ import tempfile
 import csv
 import os
 import shutil
+import gzip
 
 
 def parse_arguments():
@@ -61,32 +62,130 @@ def parse_arguments():
         "--max_read_support", type=int, default=1,
         help="Maximum read support for a candidate variant. Default=1."
     )
-    parser.add_argument(
-        "--dist_from_five_prime",
-        type=int, default=100,
-        help=(
-            "Candidate mutations withing this distance of the 5' end of a read "
-            "will be considered."
-        )
-    )
+    # parser.add_argument(
+    #     "--dist_from_five_prime",
+    #     type=int, default=100,
+    #     help=(
+    #         "Candidate mutations withing this distance of the 5' end of a read "
+    #         "will be considered."
+    #     )
+    # )
     return parser.parse_args()
+
+
+# def read_bed_file(bed_file):
+#     """
+#     Read a BED file and return a list of (chrom, start, end) tuples (0-based).
+#     """
+#     regions = []
+#     with open(bed_file, "r") as f:
+#         for line in f:
+#             line = line.strip()
+#             if not line or line.startswith("#"):
+#                 continue
+#             fields = line.split()
+#             if len(fields) < 3:
+#                 continue
+#             chrom, start, end = fields[0], int(fields[1]), int(fields[2])
+#             regions.append((chrom, start, end))
+#     return regions
+
+def merge_regions(regions):
+    """
+    Merge overlapping or adjacent regions.
+    Assumes regions is a list of (chrom, start, end) tuples.
+    Returns a merged list of non-overlapping regions.
+    """
+    if not regions:
+        return []
+    # Sort regions by chromosome and start position.
+    regions = sorted(regions, key=lambda r: (r[0], r[1]))
+    merged = []
+    current_chrom, current_start, current_end = regions[0]
+    for chrom, start, end in regions[1:]:
+        if chrom == current_chrom and start <= current_end:  # overlap or adjacent
+            current_end = max(current_end, end)
+        else:
+            merged.append((current_chrom, current_start, current_end))
+            current_chrom, current_start, current_end = chrom, start, end
+    merged.append((current_chrom, current_start, current_end))
+    return merged
 
 
 def read_bed_file(bed_file):
     """
-    Read a BED file and return a list of (chrom, start, end) tuples (0-based).
+    Read a BED file, which can be either:
+    - A plain text BED file.
+    - A bgzipped and Tabix-indexed BED file.
+
+    Returns a list of (chrom, start, end) tuples (0-based).
+
+    Parameters:
+        bed_file (str): Path to the BED file. It can be plain or bgzipped (.gz).
+
+    Returns:
+        List[Tuple[str, int, int]]: A list of genomic regions.
+
+    Raises:
+        FileNotFoundError: If the BED file does not exist.
+        ValueError: If the BED file is compressed but not indexed.
     """
+    if not os.path.isfile(bed_file):
+        raise FileNotFoundError(f"BED file not found: {bed_file}")
+
     regions = []
-    with open(bed_file, "r") as f:
-        for line in f:
-            line = line.strip()
-            if not line or line.startswith("#"):
-                continue
-            fields = line.split()
-            if len(fields) < 3:
-                continue
-            chrom, start, end = fields[0], int(fields[1]), int(fields[2])
-            regions.append((chrom, start, end))
+
+    # Determine if the file is bgzipped based on the extension and magic number
+    is_bgzipped = False
+    if bed_file.endswith('.gz'):
+        try:
+            with gzip.open(bed_file, 'rb') as f:
+                magic_number = f.read(2)
+                if magic_number == b'\x1f\x8b':
+                    is_bgzipped = True
+        except OSError:
+            # If gzip.open fails, it's not a valid gzipped file
+            is_bgzipped = False
+
+    # If bgzipped, check for Tabix index (.tbi)
+    if is_bgzipped:
+        tbx_file = bed_file + '.tbi'
+        if not os.path.isfile(tbx_file):
+            raise ValueError(f"Tabix index (.tbi) not found for gzipped BED file: {bed_file}")
+
+        try:
+            tbx = pysam.TabixFile(bed_file)
+        except Exception as e:
+            raise ValueError(f"Failed to open Tabix-indexed BED file: {bed_file}. Error: {e}")
+
+        try:
+            for record in tbx.fetch():
+                fields = record.strip().split('\t')
+                if len(fields) < 3:
+                    continue  # Skip malformed lines
+                chrom, start, end = fields[0], int(fields[1]), int(fields[2])
+                regions.append((chrom, start, end))
+        finally:
+            tbx.close()
+    else:
+        # Assume it's a plain text BED file
+        try:
+            # Use gzip to handle both compressed and uncompressed files transparently
+            open_func = gzip.open if bed_file.endswith('.gz') else open
+            with open_func(bed_file, 'rt') as f:
+                for line in f:
+                    line = line.strip()
+                    if not line or line.startswith("#"):
+                        continue  # Skip empty lines and comments
+                    fields = line.split('\t')
+                    if len(fields) < 3:
+                        continue  # Skip malformed lines
+                    chrom, start, end = fields[0], int(fields[1]), int(fields[2])
+                    regions.append((chrom, start, end))
+        except Exception as e:
+            raise ValueError(f"Failed to read BED file: {bed_file}. Error: {e}")
+
+    regions = merge_regions(regions)
     return regions
 
 
@@ -173,23 +272,102 @@ def detect_chrom_prefix_fasta(fasta_file):
     return ""
 
 
-def detect_chrom_prefix_bed(bed_file):
+# def detect_chrom_prefix_bed(bed_file):
+#     """
+#     Detect whether chromosome names in a BED file are prefixed with 'chr'.
+#     Returns 'chr' or ''.
+#     """
+#     if not bed_file:
+#         return ""
+#     with open(bed_file, "r") as f:
+#         for line in f:
+#             line = line.strip()
+#             if not line or line.startswith("#"):
+#                 continue
+#             chrom = line.split()[0]
+#             if chrom.startswith("chr"):
+#                 return "chr"
+#     return ""
+
+def detect_chrom_prefix_bed(bed_file, max_lines=100):
     """
     Detect whether chromosome names in a BED file are prefixed with 'chr'.
-    Returns 'chr' or ''.
+    Returns 'chr' if any chromosome name starts with 'chr', otherwise ''.
+
+    This function handles both plain and bgzipped + Tabix-indexed BED files.
+
+    Parameters:
+        bed_file (str): Path to the BED file. Can be plain or bgzipped (.gz).
+        max_lines (int): Maximum number of lines to inspect for detection. Default=100.
+
+    Returns:
+        str: 'chr' if chromosome names are prefixed with 'chr', otherwise ''.
+
+    Raises:
+        FileNotFoundError: If the BED file does not exist.
+        ValueError: If the BED file is bgzipped but not indexed, or if reading fails.
     """
     if not bed_file:
         return ""
-    with open(bed_file, "r") as f:
-        for line in f:
-            line = line.strip()
-            if not line or line.startswith("#"):
-                continue
-            chrom = line.split()[0]
-            if chrom.startswith("chr"):
-                return "chr"
-    return ""
 
+    if not os.path.isfile(bed_file):
+        raise FileNotFoundError(f"BED file not found: {bed_file}")
+
+    is_bgzipped = False
+    if bed_file.endswith('.gz'):
+        try:
+            with gzip.open(bed_file, 'rb') as f:
+                magic_number = f.read(2)
+                if magic_number == b'\x1f\x8b':
+                    is_bgzipped = True
+        except OSError:
+            # If gzip.open fails, it's not a valid gzipped file
+            is_bgzipped = False
+
+    try:
+        if is_bgzipped:
+            tbx_file = bed_file + '.tbi'
+            if not os.path.isfile(tbx_file):
+                raise ValueError(f"Tabix index (.tbi) not found for gzipped BED file: {bed_file}")
+
+            tbx = pysam.TabixFile(bed_file)
+            try:
+                count = 0
+                for record in tbx.fetch():
+                    fields = record.strip().split('\t')
+                    if len(fields) < 1:
+                        continue  # Skip malformed lines
+                    chrom = fields[0]
+                    if chrom.startswith("chr"):
+                        return "chr"
+                    count += 1
+                    if count >= max_lines:
+                        break
+            finally:
+                tbx.close()
+        else:
+            # Determine the appropriate open function
+            open_func = gzip.open if bed_file.endswith('.gz') else open
+            mode = 'rt'  # Text mode
+            with open_func(bed_file, mode) as f:
+                count = 0
+                for line in f:
+                    line = line.strip()
+                    if not line or line.startswith("#"):
+                        continue  # Skip empty lines and comments
+                    fields = line.split('\t')
+                    if len(fields) < 1:
+                        continue  # Skip malformed lines
+                    chrom = fields[0]
+                    if chrom.startswith("chr"):
+                        return "chr"
+                    count += 1
+                    if count >= max_lines:
+                        break
+    except Exception as e:
+        raise ValueError(f"Failed to read BED file: {bed_file}. Error: {e}")
+
+    return ""
 
 def unify_chromosome_name(chrom, from_prefix, to_prefix):
     """
@@ -272,7 +450,7 @@ def process_chunk(
     chunk_regions, temp_dir, bam_file, ref_fasta_file,
     avoid_dict, bam_prefix, ref_prefix, from_prefix, avoid_bed_prefix,
     mapq_threshold, baseq_threshold, min_coverage, max_read_support,
-    max_dist_from_five_prime
+    # max_dist_from_five_prime
 ):
     """
     A function to process a chunk of regions (list of (chrom, start, end)) in one worker.
@@ -357,14 +535,14 @@ def process_chunk(
                 for read_name, base in read_bases.items():
                     if base == alt_base:
                         pos_on_read = read_positions[read_name]
-                        # check if read is forward or reverse
-                        if read_orientations[read_name]:
-                            if (read_lengths[read_name] -
-                                    max_dist_from_five_prime > pos_on_read):
-                                continue
-                        else:
-                            if pos_on_read >= max_dist_from_five_prime:
-                                continue
+                        # # check if read is forward or reverse
+                        # if read_orientations[read_name]:
+                        #     if (read_lengths[read_name] -
+                        #             max_dist_from_five_prime > pos_on_read):
+                        #         continue
+                        # else:
+                        #     if pos_on_read >= max_dist_from_five_prime:
+                        #         continue
                         try:
                             trinuc = get_ICAMS_trinucleotide_context(
                                 ref_fasta, ref_chrom, pos0, alt_base
@@ -407,8 +585,6 @@ def main():
         # If no bed_file is provided, chunk the entire contigs from the BAM
         region_chunks = chunk_all_contigs(args.bam, args.num_threads)
 
-    region_chunks = [chunk[:2] for chunk in region_chunks]
-
     # 2) Build avoid dict
     avoid_dict = build_avoid_region_dict(args.avoid_bed)
     avoid_bed_prefix = detect_chrom_prefix_bed(args.avoid_bed) if args.avoid_bed else ""
@@ -439,7 +615,7 @@ def main():
         "baseq_threshold": args.baseq_threshold,
         "min_coverage": args.min_coverage,
         "max_read_support": args.max_read_support,
-        "max_dist_from_five_prime": args.dist_from_five_prime
+        # "max_dist_from_five_prime": args.dist_from_five_prime
     }
 
     worker_func = partial(process_chunk, **worker_args)

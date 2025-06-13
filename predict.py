@@ -1,4 +1,3 @@
-
 import argparse
 import torch
 import os
@@ -43,7 +42,7 @@ def get_args():
         help='Batch size for prediction.'
     )
     parser.add_argument(
-        '--max_read_length', type=int, default=100,
+        '--max_read_length', type=int, default=151,
         help='Maximum read length.'
     )
     parser.add_argument(
@@ -85,13 +84,23 @@ def get_args():
         help='Use Readformer model configuration.'
     )
 
+    parser.add_argument(
+        '--max_base_quality', type=int, default=50,
+        help='Maximum base quality value.'
+    )
+
+    parser.add_argument(
+        '--no_reference', action='store_true',
+        help='If set, do not use reference base embedding.'
+    )
+
     args = parser.parse_args()
     return args
 
 
 def instantiate_model(args, device):
     input_embedding = InputEmbeddingLayer(
-        args.emb_dim
+        args.emb_dim, args.max_base_quality
     ).to(device)
 
     readformer_model = Model(
@@ -101,11 +110,15 @@ def instantiate_model(args, device):
         num_hyena=args.num_hyena, num_attention=args.num_attention
     ).to(device)
 
-    ref_base_embedding = NucleotideEmbeddingLayer(
-        args.emb_dim, mlm_mode=True
-    ).to(device)
+    if args.no_reference:
+        ref_base_embedding = None
+    else:
+        ref_base_embedding = NucleotideEmbeddingLayer(
+            args.emb_dim, mlm_mode=True
+        ).to(device)
     classifier = BetaDistributionClassifier(
-        input_dim=args.emb_dim, hidden_dim=args.emb_dim // 2
+        input_dim=args.emb_dim, hidden_dim=args.emb_dim // 2,
+        using_reference_embedding=not args.no_reference,
     ).to(device)
 
     return (
@@ -114,7 +127,6 @@ def instantiate_model(args, device):
 
 
 def load_pretrained_model(args, device):
-
     (
         input_embedding, readformer_model, ref_base_embedding, classifier
     ) = instantiate_model(args, device)
@@ -129,7 +141,8 @@ def load_pretrained_model(args, device):
     try:
         input_embedding.load_state_dict(checkpoint['input_embedding_state_dict'])
         readformer_model.load_state_dict(checkpoint['model_state_dict'])
-        ref_base_embedding.load_state_dict(checkpoint['ref_base_embedding_state_dict'])
+        if not args.no_reference:
+            ref_base_embedding.load_state_dict(checkpoint['ref_base_embedding_state_dict'])
         classifier.load_state_dict(checkpoint['classifier_state_dict'])
     except KeyError as e:
         logging.error(f"Missing key in the checkpoint '{args.model_path}': {e}")
@@ -155,6 +168,7 @@ class PredictionWriter:
     """
     Class to write the predictions to a CSV file.
     """
+
     def __init__(self, output_dir):
         self.output_dir = output_dir
         self.csv_file = None
@@ -173,9 +187,10 @@ class PredictionWriter:
         ])
 
     def update(
-            self, alpha, beta, chr_=None, pos=None, ref=None, alt=None,
+            self, values, chr_=None, pos=None, ref=None, alt=None,
             mapped_to_reverse=None, read_id=None, mutation_type=None
     ):
+        alpha, beta = values
         batch_size = alpha.shape[0]
         alpha = alpha.detach().cpu().numpy()
         beta = beta.detach().cpu().numpy()
@@ -221,7 +236,6 @@ class PredictionWriter:
 
 
 def main():
-
     args = get_args()
 
     logging.basicConfig(
@@ -261,15 +275,15 @@ def main():
         position_pad_idx=-1,
         max_read_length=args.max_read_length,
         shuffle=False,
-        num_workers=get_allocated_cpus() // 2,
+        num_workers=get_allocated_cpus() - 4,  # Reserve 4 for the main process and the writer
         prefetch_factor=1
-        # num_workers=0
     )
 
     # Set the model to evaluation mode
     input_embedding.eval()
     readformer_model.eval()
-    ref_base_embedding.eval()
+    if not args.no_reference:
+        ref_base_embedding.eval()
     classifier.eval()
 
     with (
@@ -285,7 +299,10 @@ def main():
 
             positions = batch['positions'].to(device)
 
-            reference = batch['reference'].to(device)
+            if args.no_reference:
+                reference = None
+            else:
+                reference = batch['reference'].to(device)
 
             mutation_positions = batch['mut_pos'].to(device).unsqueeze(-1)
 
@@ -295,6 +312,22 @@ def main():
             alt = batch['alt']
             is_reverse = batch['is_reverse']
             mutation_type = batch['mutation_type']
+
+            idx = torch.nonzero(positions == mutation_positions, as_tuple=True)
+
+            if idx[0].shape[0] != nucleotide_sequences.size(0):
+                keep = set(idx[0].tolist())
+                batch_idx = torch.arange(nucleotide_sequences.size(0), device=device)
+                mask = torch.tensor([i in keep for i in batch_idx], device=device)
+
+                nucleotide_sequences = nucleotide_sequences[mask]
+                base_qualities = base_qualities[mask]
+                cigar_encoding = cigar_encoding[mask]
+                is_first_flags = is_first_flags[mask]
+                mapped_to_reverse_flags = mapped_to_reverse_flags[mask]
+                positions = positions[mask]
+                if reference is not None:
+                    reference = reference[mask]
 
             del batch
 
@@ -307,42 +340,63 @@ def main():
             readformer_out = readformer_model(
                 model_input, positions
             )
-            reference_embs = ref_base_embedding(reference).squeeze(-2)
+            if args.no_reference:
+                reference_embs = None
+            else:
+                reference_embs = ref_base_embedding(reference).squeeze(-2)
 
-            indices = torch.nonzero(
-                positions == mutation_positions, as_tuple=True
-            )
+            # indices = torch.nonzero(
+            #     positions == mutation_positions, as_tuple=True
+            # )
+            #
+            # if indices[0].shape[0] != args.batch_size:
+            #     # Figure out which sequence is missing
+            #     missing_indices = torch.tensor(
+            #         list(set(range(args.batch_size)) - set(indices[0].tolist())))
+            #     remaining_indices = torch.tensor(
+            #         list(set(range(args.batch_size)) - set(missing_indices.tolist())))
+            #
+            #     # keep references and labels of the remaining sequences
+            #     if not args.no_reference:
+            #         reference_embs = reference_embs[remaining_indices]
+            #     # Get list from tensor of missing indices
+            #     chr_ = [chr_[i] for i in remaining_indices.tolist()]
+            #     mutation_positions = [
+            #         mutation_positions.tolist()[i]
+            #         for i in remaining_indices.tolist()
+            #     ]
+            #     ref = [ref[i] for i in remaining_indices.tolist()]
+            #     alt = [alt[i] for i in remaining_indices.tolist()]
+            #     is_reverse = [is_reverse[i] for i in remaining_indices.tolist()]
+            #     read_id = [read_id[i] for i in remaining_indices.tolist()]
+            #     mutation_type = [
+            #         mutation_type[i] for i in remaining_indices.tolist()
+            #     ]
+            #
+            # classifier_input = readformer_out[indices]
 
-            if indices[0].shape[0] != args.batch_size:
-                # Figure out which sequence is missing
-                missing_indices = torch.tensor(
-                    list(set(range(args.batch_size)) - set(indices[0].tolist())))
-                remaining_indices = torch.tensor(
-                    list(set(range(args.batch_size)) - set(missing_indices.tolist())))
+            alpha, beta = classifier(readformer_out[idx], reference_embs)
 
-                # keep references and labels of the remaining sequences
+            # use the idx to remove the missing chr_, pos, ref, alt, is_reverse, read_id, mutation_type
 
-                reference_embs = reference_embs[remaining_indices]
-                # Get list from tensor of missing indices
-                chr_ = [chr_[i] for i in remaining_indices.tolist()]
-                mutation_positions = [
-                    mutation_positions.tolist()[i]
-                    for i in remaining_indices.tolist()
-                ]
-                ref = [ref[i] for i in remaining_indices.tolist()]
-                alt = [alt[i] for i in remaining_indices.tolist()]
-                is_reverse = [is_reverse[i] for i in remaining_indices.tolist()]
-                read_id = [read_id[i] for i in remaining_indices.tolist()]
-                mutation_type = [
-                    mutation_type[i] for i in remaining_indices.tolist()
-                ]
+            idx_list = idx[0].tolist()
 
-            classifier_input = readformer_out[indices]
+            mut_pos_list = mutation_positions.tolist()
 
-            alpha, beta, _, _ = classifier(classifier_input, reference_embs)
+            chr_ = [chr_[i] for i in idx_list]
+            mutation_positions = [
+                mut_pos_list[i] for i in idx_list
+            ]
+            ref = [ref[i] for i in idx_list]
+            alt = [alt[i] for i in idx_list]
+            is_reverse = [is_reverse[i] for i in idx_list]
+            read_id = [read_id[i] for i in idx_list]
+            mutation_type = [
+                mutation_type[i] for i in idx_list
+            ]
 
             writer.update(
-                alpha.squeeze(-1), beta.squeeze(-1), chr_=chr_,
+                (alpha.squeeze(-1), beta.squeeze(-1)), chr_=chr_,
                 pos=mutation_positions, ref=ref, alt=alt,
                 mapped_to_reverse=is_reverse, read_id=read_id,
                 mutation_type=mutation_type
