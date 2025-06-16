@@ -455,7 +455,7 @@ def main():
                 # scheduler for burn_in_iters
                 total_steps = args.burn_in_iters
                 scheduler = OneCycleLR(
-                    optimiser, max_lr=args.base_lr * 2 if not args.use_RL else args.base_lr * 5,
+                    optimiser, max_lr=args.base_lr * 2,
                     total_steps=total_steps,
                     pct_start=0.0, anneal_strategy='cos',
                     cycle_momentum=False,
@@ -496,7 +496,7 @@ def main():
                         pct_start=0.3 if args.pre_trained_path else 0.0,
                         anneal_strategy='cos',
                         cycle_momentum=False,
-                        div_factor=1000.0 if args.pre_trained_path else 25.0,
+                        div_factor=25.0,
                         final_div_factor=100.0
                     )
                 else:

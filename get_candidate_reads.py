@@ -497,6 +497,8 @@ def process_chunk(
             read_lengths = {}
 
             for pileupread in pileupcolumn.pileups:
+                if pileupread.indel != 0:
+                    continue
                 if pileupread.is_del or pileupread.is_refskip:
                     continue
                 read = pileupread.alignment
@@ -512,10 +514,10 @@ def process_chunk(
 
                 base = base.upper()
                 base_counts[base] += 1
-                read_bases[read.query_name] = base
-                read_positions[read.query_name] = idx_on_read
-                read_orientations[read.query_name] = read.is_reverse
-                read_lengths[read.query_name] = len(read.query_sequence)
+                read_bases[(read.query_name, read.is_read1)] = base
+                read_positions[(read.query_name, read.is_read1)] = idx_on_read
+                read_orientations[(read.query_name, read.is_read1)] = read.is_reverse
+                read_lengths[(read.query_name, read.is_read1)] = len(read.query_sequence)
 
             coverage = sum(base_counts.values())
             if coverage < min_coverage:
@@ -532,7 +534,7 @@ def process_chunk(
                 ref_count = base_counts.get(ref_base, 0)
 
                 # Build up records
-                for read_name, base in read_bases.items():
+                for (read_name, strand), base in read_bases.items():
                     if base == alt_base:
                         pos_on_read = read_positions[read_name]
                         # # check if read is forward or reverse
