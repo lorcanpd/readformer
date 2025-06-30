@@ -73,23 +73,6 @@ def parse_arguments():
     return parser.parse_args()
 
 
-# def read_bed_file(bed_file):
-#     """
-#     Read a BED file and return a list of (chrom, start, end) tuples (0-based).
-#     """
-#     regions = []
-#     with open(bed_file, "r") as f:
-#         for line in f:
-#             line = line.strip()
-#             if not line or line.startswith("#"):
-#                 continue
-#             fields = line.split()
-#             if len(fields) < 3:
-#                 continue
-#             chrom, start, end = fields[0], int(fields[1]), int(fields[2])
-#             regions.append((chrom, start, end))
-#     return regions
-
 def merge_regions(regions):
     """
     Merge overlapping or adjacent regions.
