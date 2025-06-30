@@ -505,9 +505,10 @@ def main():
                     scheduler = OneCycleLR(
                         optimiser, max_lr=max_lr_list,
                         total_steps=total_steps,
-                        pct_start=0.0, anneal_strategy='linear',
+                        pct_start=0.0 if not args.pre_trained_path else 0.3,
+                        anneal_strategy='cos',
                         cycle_momentum=False,
-                        div_factor=1.0,
+                        div_factor=1.0 if not args.pre_trained_path else 25.0,
                         final_div_factor=1.0
                     )
                 # calculate the greedy epsilon decay constant
@@ -615,8 +616,8 @@ def main():
 
                 # fill in only the incorrect entries
                 # term[mask] = diff[mask].float() / mx[mask].float()
-                eta1 = torch.rand(1, dtype=torch.float32, device=device) * 0.1 - 0.05
-                eta2 = torch.rand(1, dtype=torch.float32, device=device) * 0.1 - 0.05
+                eta1 = torch.rand(1, dtype=torch.float32, device=device) * 0.1
+                eta2 = torch.rand(1, dtype=torch.float32, device=device) * 0.1
 
                 # reward = torch.rand_like(lbl, dtype=torch.float32) * -0.5
                 # raw_reward[(action_int == 1) & (lbl == 1)] += 10  # true positive
@@ -627,7 +628,7 @@ def main():
                 raw_reward[(action_int == 1) & (lbl == 1)] += 1  # true positive
                 raw_reward[(action_int == 0) & (lbl == 1)] += -1  # false negative
                 raw_reward[(action_int == 0) & (lbl == 0)] += 1  # true negative
-                raw_reward[(action_int == 1) & (lbl == 0)] += -1  # false positive
+                raw_reward[(action_int == 1) & (lbl == 0)] += -20  # false positive.  20 seems to be the best value so far.
 
                 reward = raw_reward
 
@@ -641,6 +642,9 @@ def main():
 
                 # incorrect
                 reward[~correct] -= eta2
+
+                # subtract the mean reward to center it around 0
+                reward = reward - reward.mean()
 
                 # Divide by batch standard deviation so we have unit variance
                 reward = reward / (reward.std() + 1e-9)
@@ -830,11 +834,13 @@ def main():
             f"Val NDCG={valm['NDCG']:.4f} \n"
             f"Val Overlap Coefficient (Balanced)={valm['Overlap Coefficient (Balanced)']:.4f} \n"
             f"Val Bayes Error={valm['Bayes Error']:.4f} \n"
-            f"Val weighted precision@k: k=1: {valm['Prior weighted precision@1']}, "
-            f"k=2: {valm['Prior weighted precision@2']}, "
-            f"k=5: {valm['Prior weighted precision@5']}, "
-            f"k=10: {valm['Prior weighted precision@10']}, "
-            f"k=20: {valm['Prior weighted precision@20']}"
+            f"Val weighted precision@k: k=1: {valm['Precision@1']}, "
+            f"k=2: {valm['Precision@2']}, "
+            f"k=5: {valm['Precision@5']}, "
+            f"k=10: {valm['Precision@10']}, "
+            f"k=20: {valm['Precision@20']}, "
+            f"k=30: {valm['Precision@30']}, "
+            f"k=50: {valm['Precision@50']}"
 
         )
         if args.use_RL:
@@ -882,11 +888,13 @@ def main():
                     "val_overlap_coef": valm['Overlap Coefficient (Balanced)'],
                     # "val_Bayes_error": valm['Bayes Error'],
                     "gradient_norm": global_grad_norm,
-                    "val_weighted_precision@1": valm['Prior weighted precision@1'],
-                    "val_weighted_precision@2": valm['Prior weighted precision@2'],
-                    "val_weighted_precision@5": valm['Prior weighted precision@5'],
-                    "val_weighted_precision@10": valm['Prior weighted precision@10'],
-                    "val_weighted_precision@20": valm['Prior weighted precision@20'],
+                    "val_precision@1": valm['Precision@1'],
+                    "val_precision@2": valm['Precision@2'],
+                    "val_precision@5": valm['Precision@5'],
+                    "val_precision@10": valm['Precision@10'],
+                    "val_precision@20": valm['Precision@20'],
+                    "val_precision@30": valm['Precision@30'],
+                    "val_precision@50": valm['Precision@50'],
                 }
             else:
                 log = {
@@ -919,11 +927,13 @@ def main():
                     # "val_Bayes_error": valm['Bayes Error'],
                     # gradient norm
                     "gradient_norm": global_grad_norm,
-                    "val_weighted_precision@1": valm['Prior weighted precision@1'],
-                    "val_weighted_precision@2": valm['Prior weighted precision@2'],
-                    "val_weighted_precision@5": valm['Prior weighted precision@5'],
-                    "val_weighted_precision@10": valm['Prior weighted precision@10'],
-                    "val_weighted_precision@20": valm['Prior weighted precision@20'],
+                    "val_precision@1": valm['Precision@1'],
+                    "val_precision@2": valm['Precision@2'],
+                    "val_precision@5": valm['Precision@5'],
+                    "val_precision@10": valm['Precision@10'],
+                    "val_precision@20": valm['Precision@20'],
+                    "val_precision@30": valm['Precision@30'],
+                    "val_precision@50": valm['Precision@50'],
                     "epsilon": epsilon,
                 }
             wandb.log(

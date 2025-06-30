@@ -841,6 +841,45 @@ def weighted_precision_at_k(
     return ppv_k
 
 
+# Unweighted precision at k which takes an input of scores, labels, and a list of ks.
+def precision_at_ks(
+        scores: torch.Tensor,  # shape (N,) – higher = “more positive”
+        labels: torch.Tensor,  # shape (N,) – 1 = pos, 0 = neg
+        ks: list[int | float],  # list of integers k or fractions 0<k≤1
+):
+    """
+    Compute unweighted precision at multiple k values.
+
+    Args:
+        scores: Tensor of model scores.
+        labels: Tensor of true labels.
+        ks: List of integers or fractions representing top-k thresholds.
+
+    Returns:
+        A dictionary mapping each k to its precision value.
+    """
+    if not isinstance(ks, list):
+        raise ValueError("`ks` must be a list of integers or floats.")
+
+    precisions = {}
+    for k in ks:
+        if not (isinstance(k, int) or (isinstance(k, float) and 0 < k <= 1)):
+            raise ValueError("Each k must be an integer or a fraction in (0, 1].")
+        # get top_k precision
+        if isinstance(k, float):
+            k = int(max(1, round(k * scores.numel())))
+            k = min(k, scores.numel())
+        elif isinstance(k, int):
+            k = min(k, scores.numel())
+        topk_idx = torch.topk(scores, k=k, largest=True, sorted=False).indices
+        topk_labels = labels[topk_idx]
+        tp = topk_labels.sum().item()
+        precision = tp / k if k > 0 else 0.0
+        precisions[k] = precision
+
+    return precisions
+
+
 @torch.no_grad()
 def pr_auc_at_prior(
         y_true: torch.Tensor,  # 1-D (N,)  –  1 for positives, 0 for negatives
@@ -988,34 +1027,40 @@ def run_validation(
             pi_pos=args.alpha_prior / (args.alpha_prior + args.beta_prior)
         )
 
-        prec_1 = weighted_precision_at_k(
-            pt, lbl,
-            k=1,
-            pi_pos=args.alpha_prior / (args.alpha_prior + args.beta_prior)
-        )
+        # prec_1 = weighted_precision_at_k(
+        #     pt, lbl,
+        #     k=1,
+        #     pi_pos=args.alpha_prior / (args.alpha_prior + args.beta_prior)
+        # )
+        #
+        # prec_2 = weighted_precision_at_k(
+        #     pt, lbl,
+        #     k=2,
+        #     pi_pos=args.alpha_prior / (args.alpha_prior + args.beta_prior)
+        # )
+        #
+        # prec_5 = weighted_precision_at_k(
+        #     pt, lbl,
+        #     k=5,
+        #     pi_pos=args.alpha_prior / (args.alpha_prior + args.beta_prior)
+        # )
+        #
+        # prec_10 = weighted_precision_at_k(
+        #     pt, lbl,
+        #     k=10,
+        #     pi_pos=args.alpha_prior / (args.alpha_prior + args.beta_prior)
+        # )
+        #
+        # prec_20 = weighted_precision_at_k(
+        #     pt, lbl,
+        #     k=20,
+        #     pi_pos=args.alpha_prior / (args.alpha_prior + args.beta_prior)
+        # )
 
-        prec_2 = weighted_precision_at_k(
-            pt, lbl,
-            k=2,
-            pi_pos=args.alpha_prior / (args.alpha_prior + args.beta_prior)
-        )
-
-        prec_5 = weighted_precision_at_k(
-            pt, lbl,
-            k=5,
-            pi_pos=args.alpha_prior / (args.alpha_prior + args.beta_prior)
-        )
-
-        prec_10 = weighted_precision_at_k(
-            pt, lbl,
-            k=10,
-            pi_pos=args.alpha_prior / (args.alpha_prior + args.beta_prior)
-        )
-
-        prec_20 = weighted_precision_at_k(
-            pt, lbl,
-            k=20,
-            pi_pos=args.alpha_prior / (args.alpha_prior + args.beta_prior)
+        precisions = precision_at_ks(
+            pt,
+            lbl,
+            ks=[1, 2, 5, 10, 20, 30, 50]
         )
 
         vm = val_metric_obj.compute()
@@ -1030,11 +1075,13 @@ def run_validation(
         vm['NDCG'] = ndcg_score
         vm['Overlap Coefficient (Balanced)'] = ovl_bal
         vm['Bayes Error'] = bayes_err
-        vm['Prior weighted precision@1'] = prec_1
-        vm['Prior weighted precision@2'] = prec_2
-        vm['Prior weighted precision@5'] = prec_5
-        vm['Prior weighted precision@10'] = prec_10
-        vm['Prior weighted precision@20'] = prec_20
+        vm['Precision@1'] = precisions.get(1, 0.0)
+        vm['Precision@2'] = precisions.get(2, 0.0)
+        vm['Precision@5'] = precisions.get(5, 0.0)
+        vm['Precision@10'] = precisions.get(10, 0.0)
+        vm['Precision@20'] = precisions.get(20, 0.0)
+        vm['Precision@30'] = precisions.get(30, 0.0)
+        vm['Precision@50'] = precisions.get(50, 0.0)
         val_metric_obj.reset()
         return loss.item(), vm, dpos, dneg
 
@@ -1151,34 +1198,40 @@ def run_validation_rl(
         assume_logits=True
     )
 
-    prec_1 = weighted_precision_at_k(
-        scores, lbl,
-        k=1,
-        pi_pos=args.alpha_prior / (args.alpha_prior + args.beta_prior)
-    )
+    # prec_1 = weighted_precision_at_k(
+    #     scores, lbl,
+    #     k=1,
+    #     pi_pos=1.0
+    # )
+    #
+    # prec_2 = weighted_precision_at_k(
+    #     scores, lbl,
+    #     k=2,
+    #     pi_pos=1.0
+    # )
+    #
+    # prec_5 = weighted_precision_at_k(
+    #     scores, lbl,
+    #     k=5,
+    #     pi_pos=1.0
+    # )
+    #
+    # prec_10 = weighted_precision_at_k(
+    #     scores, lbl,
+    #     k=10,
+    #     pi_pos=1.0
+    # )
+    #
+    # prec_20 = weighted_precision_at_k(
+    #     scores, lbl,
+    #     k=20,
+    #     pi_pos=1.0
+    # )
 
-    prec_2 = weighted_precision_at_k(
-        scores, lbl,
-        k=2,
-        pi_pos=args.alpha_prior / (args.alpha_prior + args.beta_prior)
-    )
-
-    prec_5 = weighted_precision_at_k(
-        scores, lbl,
-        k=5,
-        pi_pos=args.alpha_prior / (args.alpha_prior + args.beta_prior)
-    )
-
-    prec_10 = weighted_precision_at_k(
-        scores, lbl,
-        k=10,
-        pi_pos=args.alpha_prior / (args.alpha_prior + args.beta_prior)
-    )
-
-    prec_20 = weighted_precision_at_k(
-        scores, lbl,
-        k=20,
-        pi_pos=args.alpha_prior / (args.alpha_prior + args.beta_prior)
+    precisions = precision_at_ks(
+        scores,
+        lbl,
+        ks=[1, 2, 5, 10, 20, 30, 50]
     )
 
     # 11) Return all metrics in a dict
@@ -1199,9 +1252,11 @@ def run_validation_rl(
         "NDCG": ndcg_score,
         "Overlap Coefficient (Balanced)": ovl_bal,
         "Bayes Error": bayes_err,
-        "Prior weighted precision@1": prec_1,
-        "Prior weighted precision@2": prec_2,
-        "Prior weighted precision@5": prec_5,
-        "Prior weighted precision@10": prec_10,
-        "Prior weighted precision@20": prec_20
+        "Precision@1": precisions[1],
+        "Precision@2": precisions[2],
+        "Precision@5": precisions[5],
+        "Precision@10": precisions[10],
+        "Precision@20": precisions[20],
+        "Precision@30": precisions[30],
+        "Precision@50": precisions[50],
     }
