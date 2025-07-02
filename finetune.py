@@ -34,7 +34,12 @@ from pretrain_readwise_only import device_context, check_cuda_availability
 import gc
 
 # To avoid CUDA OOM errors with cuFFT
-torch.backends.cuda.cufft_plan_cache[0].max_size = 0
+if torch.cuda.is_available():
+    for d in range(torch.cuda.device_count()):
+        cache = torch.backends.cuda.cufft_plan_cache[d]
+        cache.clear()
+        cache.max_size = 0
+
 
 def get_args():
     parser = argparse.ArgumentParser(description="Fine-tune with 3 phases")
