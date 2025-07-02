@@ -33,6 +33,8 @@ from pretrain_readwise_only import device_context, check_cuda_availability
 
 import gc
 
+# To avoid CUDA OOM errors with cuFFT
+torch.backends.cuda.cufft_plan_cache[0].max_size = 0
 
 def get_args():
     parser = argparse.ArgumentParser(description="Fine-tune with 3 phases")
@@ -910,12 +912,12 @@ def main():
                     "val_Brier (with prior)": valm['Brier Score (With prior)'],
                     "val_ECE": valm['Calibration Error (ECE)'],
                     # 1st strand 2nd strand probability difference
-                    "diff_mut": dpos,
-                    "diff_art": dneg,
+                    # "diff_mut": dpos,
+                    # "diff_art": dneg,
                     # balanced accuracy
-                    "train_balanced_accuracy": balanced_acc,
-                    "train_TPR": tpr,
-                    "train_TNR": tnr,
+                    # "train_balanced_accuracy": balanced_acc,
+                    # "train_TPR": tpr,
+                    # "train_TNR": tnr,
                     "val_balanced_accuracy": valm['Balanced Accuracy'],
                     "val_TPR": valm['TPR'],
                     "val_TNR": valm['TNR'],
