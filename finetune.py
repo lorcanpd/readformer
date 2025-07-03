@@ -38,12 +38,11 @@ if torch.cuda.is_available():
     for d in range(torch.cuda.device_count()):
         cache = torch.backends.cuda.cufft_plan_cache[d]
         cache.clear()
-        cache.max_size = 0
+        cache.max_size = 32
 
 
 def get_args():
     parser = argparse.ArgumentParser(description="Fine-tune with 3 phases")
-    # ... all your original arguments, unchanged ...
     parser.add_argument('--name', type=str, required=True, help='Name')
     parser.add_argument('--project', type=str, default='readformer_finetuning')
     parser.add_argument('--emb_dim', type=int, default=1024)
@@ -496,28 +495,28 @@ def main():
                     )
 
                 # total_steps = 200
-                if not args.use_RL:
-                    scheduler = OneCycleLR(
-                        optimiser, max_lr=max_lr_list,
-                        total_steps=total_steps,
-                        pct_start=0.3 if args.pre_trained_path else 0.0,
-                        anneal_strategy='cos',
-                        cycle_momentum=False,
-                        div_factor=25.0,
-                        final_div_factor=100.0
-                    )
-                else:
-                    # set the OneCycleLR scheduler so that it is a flat
-                    # non-decaying scheduler for the RL phase
-                    scheduler = OneCycleLR(
-                        optimiser, max_lr=max_lr_list,
-                        total_steps=total_steps,
-                        pct_start=0.0 if not args.pre_trained_path else 0.3,
-                        anneal_strategy='cos',
-                        cycle_momentum=False,
-                        div_factor=1.0 if not args.pre_trained_path else 25.0,
-                        final_div_factor=1.0
-                    )
+                # if not args.use_RL:
+                scheduler = OneCycleLR(
+                    optimiser, max_lr=max_lr_list,
+                    total_steps=total_steps,
+                    pct_start=0.3 if args.pre_trained_path else 0.0,
+                    anneal_strategy='cos',
+                    cycle_momentum=False,
+                    div_factor=25.0,
+                    final_div_factor=100.0
+                )
+                # else:
+                #     # set the OneCycleLR scheduler so that it is a flat
+                #     # non-decaying scheduler for the RL phase
+                #     scheduler = OneCycleLR(
+                #         optimiser, max_lr=max_lr_list,
+                #         total_steps=total_steps,
+                #         pct_start=0.0 if not args.pre_trained_path else 0.3,
+                #         anneal_strategy='cos',
+                #         cycle_momentum=False,
+                #         div_factor=1.0 if not args.pre_trained_path else 25.0,
+                #         final_div_factor=1.0
+                #     )
                 # calculate the greedy epsilon decay constant
                 if args.use_RL:
                     # decay constant for epsilon greedy so that it decays to

@@ -146,7 +146,7 @@ def instantiate_replay_buffers(args):
 
     # positive pool
     storage_pos = LazyMemmapStorage(
-        max_size=500_000,
+        max_size=50_000,
         scratch_dir=os.path.join(args.scratch_dir, "positive_memmap"),
         existsok=True,
     )
@@ -158,7 +158,7 @@ def instantiate_replay_buffers(args):
 
     # negative pool
     storage_neg = LazyMemmapStorage(
-        max_size=500_000,
+        max_size=50_000,
         scratch_dir=os.path.join(args.scratch_dir, "negative_memmap"),
         existsok=True,
     )

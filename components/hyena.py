@@ -243,15 +243,17 @@ class HyenaFilter(Module):
 
         self.epsilon = 1e-9  # Small value to avoid division by zero
 
-        self.alpha = nn.Parameter(torch.randn(n_order, num_heads, 1, 1))
+        self.alpha_left = nn.Parameter(torch.randn(n_order, num_heads, 1, 1))
+        self.alpha_right = nn.Parameter(torch.randn(n_order, num_heads, 1, 1))
         self.register_buffer(
             'positions',
             torch.arange(2 * max_seq_length + 1).float().view(1, 1, 1, -1)
         )
-        self.register_buffer(
-            'centre_mask',
-            torch.zeros(n_order, num_heads, 1, 1)
-        )
+        # self.register_buffer(
+        #     'centre_mask',
+        #     torch.zeros(n_order, num_heads, 1, 1)
+        # )
+        self.centre = nn.Parameter(torch.randn(n_order, num_heads, 1, 1))
 
         self.bias = bias
 
@@ -287,13 +289,16 @@ class HyenaFilter(Module):
         # Normalise h_hat along the channel dimension
         # h_hat = h_hat / (h_hat.norm(p=1, dim=-2, keepdim=True) + self.epsilon)
 
-        alpha = F.softplus(self.alpha)
+        alpha_left = F.softplus(self.alpha_left)
+        alpha_right = F.softplus(self.alpha_right)
+        centre = F.softplus(self.centre)
 
         window = torch.cat(
             [
-                torch.exp(-alpha * (self.midpoint - self.positions[..., :self.midpoint])),
-                self.centre_mask,
-                torch.exp(-alpha * (self.positions[..., self.midpoint + 1:] - self.midpoint))
+                torch.exp(-alpha_left * (self.midpoint - self.positions[..., :self.midpoint])),
+                # self.centre_mask,
+                centre,
+                torch.exp(-alpha_right * (self.positions[..., self.midpoint + 1:] - self.midpoint))
             ], dim=-1
         )
 
@@ -303,6 +308,25 @@ class HyenaFilter(Module):
         h_hat = h_hat.expand(-1, -1, self.head_dim, -1)
 
         return h_hat.unbind(dim=0)
+
+
+def next_fast_len(size: int) -> int:
+    """
+    Return the smallest integer n >= `size`
+    whose prime factors are all in {2, 3, 5}.
+    """
+    if size <= 1:
+        return 1
+
+    n = size
+    while True:
+        k = n
+        for p in (2, 3, 5):
+            while k % p == 0:
+                k //= p
+        if k == 1:
+            return n
+        n += 1
 
 
 class FFTLongConv(Module):
@@ -335,13 +359,43 @@ class FFTLongConv(Module):
         # Filters are twice the length of the input so the input must be padded
         # to prevent circular convolution.
         filter_length = filters.shape[-1]
-        padding = filter_length + 1 - input_length
+
+        conv_length = filter_length + 1
+
+        fft_length = int(next_fast_len(conv_length))
+
+        # padding = filter_length + 1 - input_length
+        padding = fft_length - input_length
         padded_inputs = F.pad(inputs, (0, padding))
 
         # Perform FFT
         padded_length = padded_inputs.shape[-1]
-        padded_inputs = torch.fft.rfft(padded_inputs, n=padded_length, dim=-1, norm='forward')
-        filters = torch.fft.rfft(filters, n=padded_length, dim=-1, norm='forward')
+
+        if not padded_inputs.is_contiguous():
+            padded_inputs = padded_inputs.contiguous()
+        if not filters.is_contiguous():
+            filters = filters.contiguous()
+
+        try:
+            padded_inputs = torch.fft.rfft(
+                padded_inputs, n=padded_length, dim=-1, norm='forward')
+        except RuntimeError as err:
+            if "CUFFT_INVALID_SIZE" in str(err):
+                padded_inputs = torch.fft.rfft(
+                    padded_inputs.cpu(), n=padded_length, dim=-1, norm='forward'
+                ).to(inputs.device)
+            else:
+                raise err
+        try:
+            filters = torch.fft.rfft(
+                filters, n=padded_length, dim=-1, norm='forward')
+        except RuntimeError as err:
+            if "CUFFT_INVALID_SIZE" in str(err):
+                filters = torch.fft.rfft(
+                    filters.cpu(), n=padded_length, dim=-1, norm='forward'
+                ).to(inputs.device)
+            else:
+                raise err
         # padded_inputs = torch.fft.rfft2(padded_inputs, s=(head_dim, padded_length), dim=(-2, -1), norm='forward')
         # filters = torch.fft.rfft2(filters, s=(head_dim, padded_length), dim=(-2, -1), norm='forward')
         # Element-wise multiplication in the frequency domain
