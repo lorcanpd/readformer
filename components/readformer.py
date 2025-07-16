@@ -161,13 +161,13 @@ class RotaryHyenaFilter(Module):
         The number of long convolution filters to generate.
     """
 
-    def __init__(self, emb_dim, n_order, max_sequence_length=100, num_heads=4):
+    def __init__(self, emb_dim, n_order, max_sequence_length=151, num_heads=4):
         super(RotaryHyenaFilter, self).__init__()
         self.emb_dim = emb_dim
         self.num_heads = num_heads
         self.max_sequence_length = max_sequence_length
         self.filter_generator = HyenaFilter(
-            emb_dim, n_order, num_heads
+            emb_dim, n_order, num_heads, max_seq_length=max_sequence_length
         )
         self.positions = torch.arange(
             0, 2 * max_sequence_length + 1).to(torch.float32)
@@ -338,7 +338,7 @@ class ReadformerBlock(Module):
 
     def __init__(
             self, emb_dim, n_order, kernel_size, num_heads, num_hyena=1,
-            num_attention=1, dropout=0.1
+            num_attention=1, dropout=0.1, max_sequence_length=151
     ):
         super(ReadformerBlock, self).__init__()
         self.layer_norms_hyena = nn.ModuleList(
@@ -346,7 +346,10 @@ class ReadformerBlock(Module):
         )
         self.hyenas = nn.ModuleList(
             [
-                ReadwiseHyena(emb_dim, n_order, kernel_size, num_heads)
+                ReadwiseHyena(
+                    emb_dim, n_order, kernel_size, num_heads,
+                    max_sequence_length=151
+                )
                 for _ in range(num_hyena)
             ]
         )

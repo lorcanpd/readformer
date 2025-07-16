@@ -331,7 +331,8 @@ def main():
         emb_dim=emb_dim, heads=num_heads, num_layers=num_layers,
         n_order=n_order,
         readformer=readformer, kernel_size=kernel_size,
-        num_hyena=num_hyena, num_attention=num_attention
+        num_hyena=num_hyena, num_attention=num_attention,
+        max_sequence_length=max_sequence_length
     ).apply(init_weights).to(device).train()
     # Don't train the self attention yet.
     # readformer.set_use_positionwise_self_attention(False)
@@ -371,13 +372,13 @@ def main():
 
     if not args.adam:
         optimiser = LAMB(
-            param_groups, eps=1e-9, weight_decay=0.05, adam=False,
+            param_groups, eps=1e-9, weight_decay=0.01, adam=False,
             adaptive_noise=True, noise_std=0.1, use_curvature=True,
             # sharpness_aware=True, rho=0.03
         )
     else:
         optimiser = AdamW(
-            param_groups, eps=1e-9, weight_decay=0.05
+            param_groups, eps=1e-9, weight_decay=0.01
         )
 
     loss_fn = MLMLoss()

@@ -217,7 +217,7 @@ class HyenaFilter(Module):
     """
 
     def __init__(
-            self, emb_dim, n_order, num_heads, max_seq_length=100,
+            self, emb_dim, n_order, num_heads, max_seq_length=151,
             bias=1e-9
     ):
         super(HyenaFilter, self).__init__()
@@ -360,49 +360,52 @@ class FFTLongConv(Module):
         # to prevent circular convolution.
         filter_length = filters.shape[-1]
 
-        conv_length = filter_length + 1
+        # conv_length = filter_length
 
-        fft_length = int(next_fast_len(conv_length))
+        fft_length = next_fast_len(filter_length)
 
         # padding = filter_length + 1 - input_length
-        padding = fft_length - input_length
-        padded_inputs = F.pad(inputs, (0, padding))
+        input_padding = max(0, fft_length - input_length)
+        padded_inputs = F.pad(inputs, (0, input_padding))
+
+        filter_padding = max(0, fft_length - filter_length)
+        padded_filters = F.pad(filters, (0, filter_padding))
 
         # Perform FFT
-        padded_length = padded_inputs.shape[-1]
+        # padded_length = padded_inputs.shape[-1]
 
         if not padded_inputs.is_contiguous():
             padded_inputs = padded_inputs.contiguous()
-        if not filters.is_contiguous():
-            filters = filters.contiguous()
+        if not padded_filters.is_contiguous():
+            padded_filters = padded_filters.contiguous()
 
         try:
             padded_inputs = torch.fft.rfft(
-                padded_inputs, n=padded_length, dim=-1, norm='forward')
+                padded_inputs, n=fft_length, dim=-1, norm='forward')
         except RuntimeError as err:
-            if "CUFFT_INVALID_SIZE" in str(err):
-                padded_inputs = torch.fft.rfft(
-                    padded_inputs.cpu(), n=padded_length, dim=-1, norm='forward'
-                ).to(inputs.device)
-            else:
-                raise err
+            # if "CUFFT_INVALID_SIZE" in str(err):
+            padded_inputs = torch.fft.rfft(
+                padded_inputs.cpu(), n=fft_length, dim=-1, norm='forward'
+            ).to(inputs.device)
+            # else:
+            #     raise err
         try:
-            filters = torch.fft.rfft(
-                filters, n=padded_length, dim=-1, norm='forward')
+            padded_filters = torch.fft.rfft(
+                padded_filters, n=fft_length, dim=-1, norm='forward')
         except RuntimeError as err:
-            if "CUFFT_INVALID_SIZE" in str(err):
-                filters = torch.fft.rfft(
-                    filters.cpu(), n=padded_length, dim=-1, norm='forward'
-                ).to(inputs.device)
-            else:
-                raise err
+            # if "CUFFT_INVALID_SIZE" in str(err):
+            padded_filters = torch.fft.rfft(
+                padded_filters.cpu(), n=fft_length, dim=-1, norm='forward'
+            ).to(inputs.device)
+            # else:
+            #     raise err
         # padded_inputs = torch.fft.rfft2(padded_inputs, s=(head_dim, padded_length), dim=(-2, -1), norm='forward')
         # filters = torch.fft.rfft2(filters, s=(head_dim, padded_length), dim=(-2, -1), norm='forward')
         # Element-wise multiplication in the frequency domain
-        padded_inputs.mul_(filters)
+        padded_inputs = padded_inputs * padded_filters
 
         # Inverse FFT to get the convolution result
-        result = torch.fft.irfft(padded_inputs, n=padded_length, dim=-1, norm='forward')
+        result = torch.fft.irfft(padded_inputs, n=fft_length, dim=-1, norm='forward')
         # result = torch.fft.irfft2(padded_inputs, s=(head_dim, padded_length), dim=(-2, -1), norm='forward')
 
         # Remove padding by slicing out the central portion of the result
@@ -411,6 +414,6 @@ class FFTLongConv(Module):
         # result = F.gelu(result)
 
         # Zero out the padded positions that do not represent nucleotides
-        result = result * (positions != -1).unsqueeze(1).unsqueeze(1).to(torch.float32)
+        result = result * (positions != -1).unsqueeze(1).unsqueeze(1).to(dtype=result.dtype, device=result.device)
 
         return result

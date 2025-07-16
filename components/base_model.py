@@ -52,7 +52,8 @@ class Model(nn.Module):
     """
     def __init__(
             self, emb_dim, num_layers, readformer=True, kernel_size=3,
-            num_hyena=3, num_attention=2,heads=8, n_order=4, dropout=0.1
+            num_hyena=3, num_attention=2,heads=8, n_order=4, dropout=0.1,
+            max_sequence_length=151
     ):
         super(Model, self).__init__()
         self.emb_dim = emb_dim
@@ -68,7 +69,7 @@ class Model(nn.Module):
                 [
                     ReadformerBlock(
                         emb_dim, n_order, kernel_size, heads, num_hyena,
-                        num_attention
+                        num_attention, max_sequence_length=max_sequence_length
                     )
                     for _ in range(num_layers)
                 ]

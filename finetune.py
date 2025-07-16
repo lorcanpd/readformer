@@ -95,7 +95,8 @@ def instantiate_model(args, device):
         emb_dim=args.emb_dim, heads=args.num_heads, num_layers=args.num_layers,
         n_order=args.n_order, readformer=args.readformer,
         kernel_size=args.kernel_size, num_hyena=args.num_hyena,
-        num_attention=args.num_attention
+        num_attention=args.num_attention,
+        max_sequence_length=args.max_read_length
     ).to(device)
     return input_embedding, readformer_model
 
